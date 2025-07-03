@@ -1,0 +1,24 @@
+<!DOCTYPE html><html><body>
+<h2>Manual Helper</h2>
+
+<h4>Upload a PDF</h4>
+<input type="file" id="pdf"><button onclick="upload()">Upload</button><br><br>
+
+<h4>Ask a question</h4>
+<input id="q" size="60" placeholder="Type your question…">
+<button onclick="ask()">Ask</button><br><br>
+<pre id="a"></pre>
+
+<script>
+async function upload(){
+  const fd=new FormData(); fd.append("file",pdf.files[0]);
+  const r=await fetch("/upload",{method:"POST",body:fd});
+  alert("Uploaded "+(await r.json()).file);
+}
+async function ask(){
+  const fd=new FormData(); fd.append("question",q.value);
+  const r=await fetch("/chat",{method:"POST",body:fd});
+  a.textContent=(await r.json()).answer;
+}
+</script></body></html>
+

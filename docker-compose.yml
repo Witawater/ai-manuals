@@ -1,0 +1,6 @@
+services:
+  rag-manuals:
+    build: .
+    env_file: .env      # same secrets file you use locally
+    ports:
+      - "8000:8000"
