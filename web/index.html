@@ -1,24 +1,100 @@
-<!DOCTYPE html><html><body>
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <title>Manual Helper</title>
+  <style>
+    body            { font-family: system-ui, sans-serif; padding: 20px; }
+    #answer-box     { white-space: pre-wrap; border:1px solid #ccc; padding:8px; border-radius:4px; }
+    #fb-bar button  { margin-left: 4px; font-size: 1.1em; }
+    #fb-msg         { margin-left: 6px; color: green; }
+  </style>
+</head>
+
+<body>
 <h2>Manual Helper</h2>
 
 <h4>Upload a PDF</h4>
-<input type="file" id="pdf"><button onclick="upload()">Upload</button><br><br>
+<input type="file" id="pdf">
+<button onclick="upload()">Upload</button>
+<br><br>
 
 <h4>Ask a question</h4>
 <input id="q" size="60" placeholder="Type your question…">
-<button onclick="ask()">Ask</button><br><br>
-<pre id="a"></pre>
+<button onclick="askChat(event)">Ask</button>
+<br><br>
+
+<!-- Answer & feedback block -->
+<div id="answer-box">
+  <p id="answer-text"></p>
+
+  <!-- hidden until an answer arrives -->
+  <div id="fb-bar" style="display:none;">
+    Helpful?
+    <button onclick="sendFb(1)">👍</button>
+    <button onclick="sendFb(-1)">👎</button>
+    <span id="fb-msg"></span>
+  </div>
+</div>
 
 <script>
-async function upload(){
-  const fd=new FormData(); fd.append("file",pdf.files[0]);
-  const r=await fetch("/upload",{method:"POST",body:fd});
-  alert("Uploaded "+(await r.json()).file);
-}
-async function ask(){
-  const fd=new FormData(); fd.append("question",q.value);
-  const r=await fetch("/chat",{method:"POST",body:fd});
-  a.textContent=(await r.json()).answer;
-}
-</script></body></html>
+/* ---------- globals ---------- */
+let lastQuestion   = "";
+let lastAnswer     = "";
+const currentCustomer = "demo01";      // adjust later if you add auth/tenants
 
+/* ---------- PDF upload ---------- */
+async function upload(){
+  if(!pdf.files[0]) return alert("Choose a file first");
+  const fd = new FormData();
+  fd.append("file", pdf.files[0]);
+  fd.append("customer", currentCustomer);
+  const r  = await fetch("/upload", {method:"POST", body:fd});
+  const js = await r.json();
+  alert("Uploaded " + js.file);
+}
+
+/* ---------- chat ---------- */
+async function askChat(evt){
+  evt.preventDefault();
+  const q = q.value.trim();
+  if(!q) return;
+  lastQuestion = q;
+
+  const fd = new FormData();
+  fd.append("question", q);
+  fd.append("customer", currentCustomer);
+
+  const r  = await fetch("/chat", {method:"POST", body:fd});
+  const js = await r.json();
+
+  // show answer
+  answer-text.innerText = js.answer;
+  lastAnswer = js.answer;
+
+  // reveal feedback bar
+  fb-bar.style.display = "inline";
+  fb-msg.innerText = "";
+}
+
+/* ---------- feedback ---------- */
+async function sendFb(score){
+  const resp = await fetch("/feedback", {
+    method:"POST",
+    headers: {"Content-Type":"application/json"},
+    body: JSON.stringify({
+      customer: currentCustomer,
+      question: lastQuestion,
+      answer:   lastAnswer,
+      score:    score
+    })
+  });
+  if (resp.ok){
+    fb-msg.innerText = "thanks!";
+  } else {
+    fb-msg.innerText = "error 😕";
+  }
+}
+</script>
+</body>
+</html>
