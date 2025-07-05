@@ -4,13 +4,12 @@
   <meta charset="UTF-8" />
   <title>Manual Helper</title>
   <style>
-    body            { font-family: system-ui, sans-serif; padding: 20px; }
-    #answer-box     { white-space: pre-wrap; border:1px solid #ccc; padding:8px; border-radius:4px; }
-    #fb-bar button  { margin-left: 4px; font-size: 1.1em; }
-    #fb-msg         { margin-left: 6px; color: green; }
+    body           { font-family: system-ui, sans-serif; padding: 20px; }
+    #answer-box    { white-space: pre-wrap; border:1px solid #ccc; padding:8px; border-radius:4px; }
+    #fb-bar button { margin-left: 4px; font-size: 1.1em; }
+    #fb-msg        { margin-left: 6px; color: green; }
   </style>
 </head>
-
 <body>
 <h2>Manual Helper</h2>
 
@@ -38,16 +37,23 @@
 </div>
 
 <script>
+/* ---------- element handles ---------- */
+const pdfInput   = document.getElementById("pdf");
+const qInput     = document.getElementById("q");
+const answerText = document.getElementById("answer-text");
+const fbBar      = document.getElementById("fb-bar");
+const fbMsg      = document.getElementById("fb-msg");
+
 /* ---------- globals ---------- */
 let lastQuestion   = "";
 let lastAnswer     = "";
-const currentCustomer = "demo01";      // adjust later if you add auth/tenants
+const currentCustomer = "demo01";   // adjust later if you add auth/tenants
 
 /* ---------- PDF upload ---------- */
 async function upload(){
-  if(!pdf.files[0]) return alert("Choose a file first");
+  if(!pdfInput.files[0]) { alert("Choose a file first"); return; }
   const fd = new FormData();
-  fd.append("file", pdf.files[0]);
+  fd.append("file", pdfInput.files[0]);
   fd.append("customer", currentCustomer);
   const r  = await fetch("/upload", {method:"POST", body:fd});
   const js = await r.json();
@@ -57,7 +63,7 @@ async function upload(){
 /* ---------- chat ---------- */
 async function askChat(evt){
   evt.preventDefault();
-  const q = q.value.trim();
+  const q = qInput.value.trim();
   if(!q) return;
   lastQuestion = q;
 
@@ -69,12 +75,12 @@ async function askChat(evt){
   const js = await r.json();
 
   // show answer
-  answer-text.innerText = js.answer;
+  answerText.innerText = js.answer;
   lastAnswer = js.answer;
 
   // reveal feedback bar
-  fb-bar.style.display = "inline";
-  fb-msg.innerText = "";
+  fbBar.style.display = "inline";
+  fbMsg.innerText = "";
 }
 
 /* ---------- feedback ---------- */
@@ -90,9 +96,9 @@ async function sendFb(score){
     })
   });
   if (resp.ok){
-    fb-msg.innerText = "thanks!";
+    fbMsg.innerText = "thanks!";
   } else {
-    fb-msg.innerText = "error 😕";
+    fbMsg.innerText = "error 😕";
   }
 }
 </script>
