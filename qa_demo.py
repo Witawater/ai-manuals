@@ -1,9 +1,8 @@
+#!/usr/bin/env python3
 """
-Quick Q-and-A demo for the ingested manuals
-  • OpenAI embeddings + GPT-4o
-  • Pinecone serverless (SDK v7)
-
-Run inside your project folder:
+qa_demo.py  –  Ask questions against the Pinecone index
+────────────────────────────────────────────────────────
+Run inside project root:
     source venv/bin/activate
     python qa_demo.py
 """
@@ -25,14 +24,14 @@ pc = Pinecone(
 )
 client = OpenAI(api_key=os.getenv("OPENAI_API_KEY"))
 
-# ── ensure index exists & is 1 536-dim ────────────────────────────────────
+# ── ensure index exists & is 1 536-dim (small embed model) ────────────────
 if INDEX_NAME not in pc.list_indexes().names():
     print(f"ℹ️  '{INDEX_NAME}' missing — creating an empty one…")
     cloud  = CloudProvider.AWS if "aws" in os.getenv("PINECONE_ENV") else CloudProvider.GCP
     region = os.getenv("PINECONE_ENV").split("-", 1)[-1]
     pc.create_index(
         INDEX_NAME,
-        dimension=1536,           # text-embedding-3-small
+        dimension=1536,
         metric="cosine",
         spec=ServerlessSpec(cloud=cloud, region=region),
     )
@@ -44,28 +43,35 @@ else:
     if info.dimension != 1536:
         raise RuntimeError(
             f"Index '{INDEX_NAME}' dim {info.dimension} ≠ 1536. "
-            "Delete it or change PINECONE_INDEX."
+            "Delete it or point PINECONE_INDEX somewhere else."
         )
 
 idx = pc.Index(INDEX_NAME)   # host auto-resolved
 
 # ── Q&A helper ────────────────────────────────────────────────────────────
-def chat(question: str, customer="demo01", top_k: int = 30) -> str:
-    """Return GPT-4o answer grounded in Pinecone chunks (with citations)."""
+def chat(question: str,
+         customer: str = "demo01",
+         top_k: int = 30,
+         concise: bool = False) -> str:
+    """Return a GPT-4o answer grounded in Pinecone chunks (with citations)."""
 
     # 1) embed the question
     q_vec = client.embeddings.create(
         model=EMBED_MODEL, input=[question]
     ).data[0].embedding
 
-    # 2) initial similarity search
+    # 2) similarity search
     resp = idx.query(
-        vector=q_vec, top_k=top_k,
+        vector=q_vec,
+        top_k=top_k,
         filter={"customer": {"$eq": customer}},
         include_metadata=True
     )
 
-    # 3) GPT-4o rerank → keep best 4
+    if not resp.matches:
+        return "I couldn't find anything relevant in this manual."
+
+    # 3) GPT-4o rerank → keep best ≤4
     rerank_prompt = (
         "Which chunks best answer the question?\n\n"
         f"QUESTION:\n{question}\n\n"
@@ -80,12 +86,12 @@ def chat(question: str, customer="demo01", top_k: int = 30) -> str:
         temperature=0
     ).choices[0].message.content
     keep = {int(x) for x in best.split(",") if x.strip().isdigit()}
-    resp.matches = [m for i, m in enumerate(resp.matches) if i in keep][:4]
+    resp.matches = [m for i, m in enumerate(resp.matches) if i in keep]
 
     if not resp.matches:
         return "I couldn't find anything relevant in this manual."
 
-    # 4) build full-text context for the final answer
+    # 4) build context
     context_parts = []
     for i, m in enumerate(resp.matches, start=1):
         title = m.metadata.get("title", "").strip()
@@ -93,11 +99,17 @@ def chat(question: str, customer="demo01", top_k: int = 30) -> str:
         context_parts.append(f"{tag} {m.metadata['text']}")
     context = "\n\n".join(context_parts)
 
-    # 5) ask GPT-4o for the user-visible answer
+    # 5) generate final answer
     prompt = (
         "You are a helpful support agent. ONLY use the context below.\n\n"
         f"{context}\n\n"
-        "Answer in 2-4 sentences and cite the tags you used, e.g. [1] or [2]."
+        + (
+            "Answer in 2-4 sentences and cite the tags like [1] or [2]."
+            if concise
+            else
+            "Write a complete answer, including any useful details from the context. "
+            "Cite the tags you used, e.g. [1] or [2]."
+        )
     )
     answer = client.chat.completions.create(
         model=CHAT_MODEL,
@@ -107,7 +119,7 @@ def chat(question: str, customer="demo01", top_k: int = 30) -> str:
 
     return answer
 
-# ── quick smoke-test ──────────────────────────────────────────────────────
+# ── smoke-test ────────────────────────────────────────────────────────────
 if __name__ == "__main__":
     print("\nQ1  How do I descale the coffee maker?")
     print(chat("Descaling – how do I descale the coffee maker?"), "\n")

@@ -61,6 +61,34 @@ def add_feedback(data: FeedbackIn):
             data.model_dump()
         )
     return {"ok": True}
+from datetime import date, timedelta
+from typing import List, Dict
 
+@app.get("/feedback/summary")
+def feedback_summary(days: int = 7) -> List[Dict]:
+    """
+    Return daily counts of 👍 and 👎 for the last `days` days.
+    Response:
+      [
+        {"day": "2025-07-01", "up": 3, "down": 1},
+        ...
+      ]
+    """
+    with engine.begin() as conn:
+        rows = conn.execute(text(f"""
+            SELECT
+              date_trunc('day', ts)::date   AS day,
+              SUM(CASE WHEN score =  1 THEN 1 ELSE 0 END) AS up,
+              SUM(CASE WHEN score = -1 THEN 1 ELSE 0 END) AS down
+            FROM feedback
+            WHERE ts >= now() - INTERVAL '{days} days'
+            GROUP BY day
+            ORDER BY day;
+        """))
+
+    return [
+        {"day": r.day.isoformat(), "up": int(r.up), "down": int(r.down)}
+        for r in rows
+    ]
 # ---- 4) Serve the tiny front-end ----------------------------
 app.mount("/", StaticFiles(directory="web", html=True), name="web")
