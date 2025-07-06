@@ -42,75 +42,40 @@
 </table>
 
 <script>
-let lastQuestion = "", lastAnswer = "", currentCustomer = "demo01";
+let lastQuestion = "";
+let lastAnswer   = "";
+let lastChunks   = [];
 
-/* --------  upload  -------- */
 async function upload(){
-  if(!pdf.files[0]) {alert("Choose a PDF first"); return;}
   const fd = new FormData();
   fd.append("file", pdf.files[0]);
-  fd.append("customer", currentCustomer);
   const r = await fetch("/upload", {method:"POST", body:fd});
-  const j = await r.json();
-  alert("Uploaded “"+j.file+"” and queued for ingestion");
+  alert("Uploaded " + (await r.json()).file);
 }
 
-/* --------  ask  -------- */
 async function ask(){
-  if(!q.value.trim()){ alert("Type a question"); return; }
-  const fd = new FormData();
-  fd.append("question", q.value);
-  fd.append("customer", currentCustomer);
-
-  a.textContent = "⏳ Thinking…";
-  const r = await fetch("/chat", {method:"POST", body:fd});
-  const j = await r.json();
-
   lastQuestion = q.value;
-  lastAnswer   = j.answer;
-  a.textContent = lastAnswer;
-  fbBtns.style.display = "inline";
+  const fd = new FormData();
+  fd.append("question", lastQuestion);
+  const r  = await fetch("/chat", {method:"POST", body:fd});
+  const json = await r.json();          // {answer:"…", chunks:[…]}
+  a.textContent = json.answer;
+  lastAnswer  = json.answer;
+  lastChunks  = json.chunks;            // ← store the array
 }
 
-/* --------  feedback buttons  -------- */
 async function sendFeedback(score){
   await fetch("/feedback", {
-    method: "POST",
+    method:"POST",
     headers: {"Content-Type":"application/json"},
     body: JSON.stringify({
-      customer: currentCustomer,
+      customer: "demo01",
       question: lastQuestion,
       answer:   lastAnswer,
-      score:    score
+      score:    score,
+      chunks_used: lastChunks            // ← send it
     })
   });
-  fbBtns.style.display = "none";
-  loadFeedback();          // refresh summary
 }
-
-/* --------  load summary table  -------- */
-async function loadFeedback(days=7){
-  const res = await fetch(`/feedback/summary?days=${days}`);
-  if(!res.ok){ console.error("feedback fetch failed"); return; }
-  const data = await res.json();
-
-  const tbl = document.getElementById("fb");
-  while(tbl.rows.length > 1) tbl.deleteRow(1);      // clear old rows
-
-  for(const r of data){
-    const row = tbl.insertRow();
-    row.insertCell().textContent = r.day;
-    row.insertCell().textContent = r.up;
-    row.insertCell().textContent = r.down;
-
-    /* mini-bars */
-    const max = Math.max(r.up, r.down, 1);
-    row.cells[1].style.background =
-      `linear-gradient(to right,#4caf50 ${r.up/max*100}%,transparent 0)`;
-    row.cells[2].style.background =
-      `linear-gradient(to right,#f44336 ${r.down/max*100}%,transparent 0)`;
-  }
-}
-loadFeedback();    // run once at page load
 </script>
 </body></html>

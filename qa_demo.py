@@ -8,7 +8,7 @@ Run inside project root:
 """
 
 import os, time, dotenv
-from openai import OpenAI
+from openai  import OpenAI
 from pinecone import Pinecone, ServerlessSpec, CloudProvider
 
 # ── load secrets ──────────────────────────────────────────────────────────
@@ -20,11 +20,11 @@ INDEX_NAME  = os.getenv("PINECONE_INDEX",     "manuals-small")
 
 pc = Pinecone(
     api_key     = os.getenv("PINECONE_API_KEY"),
-    environment = os.getenv("PINECONE_ENV")          # e.g. aws-us-east-1
+    environment = os.getenv("PINECONE_ENV"),      # e.g. aws-us-east-1
 )
 client = OpenAI(api_key=os.getenv("OPENAI_API_KEY"))
 
-# ── ensure index exists & is 1 536-dim (small embed model) ────────────────
+# ── ensure index exists & is 1536-dim (small embed model) ─────────────────
 if INDEX_NAME not in pc.list_indexes().names():
     print(f"ℹ️  '{INDEX_NAME}' missing — creating an empty one…")
     cloud  = CloudProvider.AWS if "aws" in os.getenv("PINECONE_ENV") else CloudProvider.GCP
@@ -52,8 +52,14 @@ idx = pc.Index(INDEX_NAME)   # host auto-resolved
 def chat(question: str,
          customer: str = "demo01",
          top_k: int = 30,
-         concise: bool = False) -> str:
-    """Return a GPT-4o answer grounded in Pinecone chunks (with citations)."""
+         concise: bool = False) -> dict:
+    """
+    Return:
+      {
+        "answer": "final GPT-4o answer …",
+        "chunks": ["vec-id-1", "vec-id-2", …]     # IDs of chunks used
+      }
+    """
 
     # 1) embed the question
     q_vec = client.embeddings.create(
@@ -69,7 +75,8 @@ def chat(question: str,
     )
 
     if not resp.matches:
-        return "I couldn't find anything relevant in this manual."
+        return {"answer": "I couldn't find anything relevant in this manual.",
+                "chunks": []}
 
     # 3) GPT-4o rerank → keep best ≤4
     rerank_prompt = (
@@ -89,7 +96,8 @@ def chat(question: str,
     resp.matches = [m for i, m in enumerate(resp.matches) if i in keep]
 
     if not resp.matches:
-        return "I couldn't find anything relevant in this manual."
+        return {"answer": "I couldn't find anything relevant in this manual.",
+                "chunks": []}
 
     # 4) build context
     context_parts = []
@@ -117,12 +125,15 @@ def chat(question: str,
         temperature=0
     ).choices[0].message.content.strip()
 
-    return answer
+    chunk_ids = [m.id for m in resp.matches]   # ← collect IDs
+
+    return {"answer": answer, "chunks": chunk_ids}
 
 # ── smoke-test ────────────────────────────────────────────────────────────
 if __name__ == "__main__":
-    print("\nQ1  How do I descale the coffee maker?")
-    print(chat("Descaling – how do I descale the coffee maker?"), "\n")
-
-    print("Q2  How do I change the brew strength?")
-    print(chat("Can I change the strength?"))
+    for q in ["How do I descale the coffee maker?",
+              "Can I change the strength?"]:
+        print("\nQ:", q)
+        out = chat(q)
+        print("Answer:", out["answer"])
+        print("Chunks:", out["chunks"])

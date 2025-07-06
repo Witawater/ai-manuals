@@ -38,14 +38,16 @@ async def ask(
     question: str = Form(...),
     customer: str = Form("demo01")
 ):
-    return {"answer": chat(question, customer)}
+    resp = chat(question, customer)          # resp is {"answer":…, "chunks":[…]}
+    return resp
 
 # ---- 3) Feedback --------------------------------------------
 class FeedbackIn(BaseModel):
     customer: str
     question: str
     answer:   str
-    score:    int            # +1 👍  or  -1 👎
+    score:    int               # +1 / -1
+    chunks_used: list[int] | None = None   # optional array
 
 @app.post("/feedback")
 def add_feedback(data: FeedbackIn):
@@ -54,12 +56,14 @@ def add_feedback(data: FeedbackIn):
 
     with engine.begin() as conn:
         conn.execute(
-            text("""
-                INSERT INTO feedback (customer, question, answer, score)
-                VALUES (:customer, :question, :answer, :score)
-            """),
-            data.model_dump()
-        )
+    text("""
+        INSERT INTO feedback
+          (customer, question, answer, score, chunks_used)
+        VALUES
+          (:customer, :question, :answer, :score, :chunks_used)
+    """),
+    data.model_dump()
+)
     return {"ok": True}
 from datetime import date, timedelta
 from typing import List, Dict
