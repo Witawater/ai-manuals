@@ -1,92 +1,81 @@
 <!DOCTYPE html>
 <html lang="en">
 <head>
-  <meta charset="UTF-8" />
-  <title>Manual Helper</title>
-  <style>
-    body           { font-family: system-ui, sans-serif; padding: 20px; }
-    #answer-box    { white-space: pre-wrap; border:1px solid #ccc; padding:8px; border-radius:4px; }
-    #fb-bar button { margin-left: 4px; font-size: 1.1em; }
-    #fb-msg        { margin-left: 6px; color: green; }
-  </style>
-</head>
-<body>
-<h2>Manual Helper</h2>
+<meta charset="utf-8">
+<title>AI Manuals Helper</title>
+<style>
+ body {font-family: sans-serif; max-width: 720px; margin: 40px auto;}
+ input[type=file], input[type=text] {padding: 4px; font-size: 1em;}
+ button {padding: 6px 10px; margin-left: 4px;}
+ pre {white-space: pre-wrap; background:#f5f5f5; padding:12px;}
 
+ /* tiny bars in summary table */
+ table#fb td {min-width: 60px;}
+</style>
+</head><body>
+
+<h2>AI Manuals Helper</h2>
+
+<!---------------------------- 1.  Upload ----------------------------------->
 <h4>Upload a PDF</h4>
 <input type="file" id="pdf">
 <button onclick="upload()">Upload</button>
-<br><br>
 
-<h4>Ask a question</h4>
+<!---------------------------- 2.  Ask -------------------------------------->
+<h4 style="margin-top:32px;">Ask a question</h4>
 <input id="q" size="60" placeholder="Type your question…">
-<button onclick="askChat(event)">Ask</button>
-<br><br>
+<button onclick="ask()">Ask</button>
 
-<!-- Answer & feedback block -->
-<div id="answer-box">
-  <p id="answer-text"></p>
-
-  <!-- hidden until an answer arrives -->
-  <div id="fb-bar" style="display:none;">
-    Helpful?
-    <button onclick="sendFb(1)">👍</button>
-    <button onclick="sendFb(-1)">👎</button>
-    <span id="fb-msg"></span>
-  </div>
+<pre id="a"></pre>
+<div id="fbBtns" style="display:none;">
+  Helpful?
+  <button onclick="sendFeedback(1)">👍</button>
+  <button onclick="sendFeedback(-1)">👎</button>
 </div>
 
+<hr>
+
+<!---------------------------- 3.  Feedback summary ------------------------->
+<h4>📈 Feedback (last 7 days)</h4>
+<table id="fb" border="1" cellpadding="4">
+  <tr><th>Date</th><th>👍</th><th>👎</th></tr>
+</table>
+
 <script>
-/* ---------- element handles ---------- */
-const pdfInput   = document.getElementById("pdf");
-const qInput     = document.getElementById("q");
-const answerText = document.getElementById("answer-text");
-const fbBar      = document.getElementById("fb-bar");
-const fbMsg      = document.getElementById("fb-msg");
+let lastQuestion = "", lastAnswer = "", currentCustomer = "demo01";
 
-/* ---------- globals ---------- */
-let lastQuestion   = "";
-let lastAnswer     = "";
-const currentCustomer = "demo01";   // adjust later if you add auth/tenants
-
-/* ---------- PDF upload ---------- */
+/* --------  upload  -------- */
 async function upload(){
-  if(!pdfInput.files[0]) { alert("Choose a file first"); return; }
+  if(!pdf.files[0]) {alert("Choose a PDF first"); return;}
   const fd = new FormData();
-  fd.append("file", pdfInput.files[0]);
+  fd.append("file", pdf.files[0]);
   fd.append("customer", currentCustomer);
-  const r  = await fetch("/upload", {method:"POST", body:fd});
-  const js = await r.json();
-  alert("Uploaded " + js.file);
+  const r = await fetch("/upload", {method:"POST", body:fd});
+  const j = await r.json();
+  alert("Uploaded “"+j.file+"” and queued for ingestion");
 }
 
-/* ---------- chat ---------- */
-async function askChat(evt){
-  evt.preventDefault();
-  const q = qInput.value.trim();
-  if(!q) return;
-  lastQuestion = q;
-
+/* --------  ask  -------- */
+async function ask(){
+  if(!q.value.trim()){ alert("Type a question"); return; }
   const fd = new FormData();
-  fd.append("question", q);
+  fd.append("question", q.value);
   fd.append("customer", currentCustomer);
 
-  const r  = await fetch("/chat", {method:"POST", body:fd});
-  const js = await r.json();
+  a.textContent = "⏳ Thinking…";
+  const r = await fetch("/chat", {method:"POST", body:fd});
+  const j = await r.json();
 
-  // show answer
-  answerText.innerText = js.answer;
-  lastAnswer = js.answer;
-
-  // reveal feedback bar
-  fbBar.style.display = "inline";
-  fbMsg.innerText = "";
+  lastQuestion = q.value;
+  lastAnswer   = j.answer;
+  a.textContent = lastAnswer;
+  fbBtns.style.display = "inline";
 }
 
-/* ---------- feedback ---------- */
-async function sendFb(score){
-  const resp = await fetch("/feedback", {
-    method:"POST",
+/* --------  feedback buttons  -------- */
+async function sendFeedback(score){
+  await fetch("/feedback", {
+    method: "POST",
     headers: {"Content-Type":"application/json"},
     body: JSON.stringify({
       customer: currentCustomer,
@@ -95,12 +84,33 @@ async function sendFb(score){
       score:    score
     })
   });
-  if (resp.ok){
-    fbMsg.innerText = "thanks!";
-  } else {
-    fbMsg.innerText = "error 😕";
+  fbBtns.style.display = "none";
+  loadFeedback();          // refresh summary
+}
+
+/* --------  load summary table  -------- */
+async function loadFeedback(days=7){
+  const res = await fetch(`/feedback/summary?days=${days}`);
+  if(!res.ok){ console.error("feedback fetch failed"); return; }
+  const data = await res.json();
+
+  const tbl = document.getElementById("fb");
+  while(tbl.rows.length > 1) tbl.deleteRow(1);      // clear old rows
+
+  for(const r of data){
+    const row = tbl.insertRow();
+    row.insertCell().textContent = r.day;
+    row.insertCell().textContent = r.up;
+    row.insertCell().textContent = r.down;
+
+    /* mini-bars */
+    const max = Math.max(r.up, r.down, 1);
+    row.cells[1].style.background =
+      `linear-gradient(to right,#4caf50 ${r.up/max*100}%,transparent 0)`;
+    row.cells[2].style.background =
+      `linear-gradient(to right,#f44336 ${r.down/max*100}%,transparent 0)`;
   }
 }
+loadFeedback();    // run once at page load
 </script>
-</body>
-</html>
+</body></html>
