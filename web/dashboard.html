@@ -1,0 +1,65 @@
+<!DOCTYPE html>
+<html>
+<head>
+  <meta charset="utf-8" />
+  <title>Feedback dashboard</title>
+  <!--  ⬇️ one-file Chart.js from CDN -->
+  <script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.3/dist/chart.umd.min.js"></script>
+  <style>
+    body { font-family: sans-serif; margin: 2rem; }
+    #period { width: 80px; }
+  </style>
+</head>
+<body>
+
+<h2>📈  Feedback dashboard</h2>
+
+<label>
+  Days:
+  <input id="period" type="number" min="1" max="30" value="7"
+         oninput="loadData()">
+</label>
+
+<canvas id="chart" width="600" height="300"></canvas>
+
+<script>
+async function loadData(){
+  const days = document.getElementById('period').value || 7;
+  const url  = `/feedback/summary?days=${days}`;
+  const data = await fetch(url).then(r=>r.json());
+
+  // --- unpack for Chart.js ---
+  const labels = data.map(d=>d.day);
+  const ups    = data.map(d=>d.up);
+  const downs  = data.map(d=>d.down);
+
+  // create / update chart
+  if(window.feedbackChart){
+    feedbackChart.data.labels = labels;
+    feedbackChart.data.datasets[0].data = ups;
+    feedbackChart.data.datasets[1].data = downs;
+    feedbackChart.update();
+    return;
+  }
+  const ctx = document.getElementById('chart');
+  window.feedbackChart = new Chart(ctx, {
+    type: 'bar',
+    data: {
+      labels,
+      datasets: [
+        { label:'👍', data:ups,  stack:'s', order:1 },
+        { label:'👎', data:downs, stack:'s', order:2 },
+      ]
+    },
+    options:{
+      responsive:true,
+      scales:{ x:{ stacked:true }, y:{ beginAtZero:true, stacked:true } }
+    }
+  });
+}
+
+// first load
+loadData();
+</script>
+</body>
+</html>
