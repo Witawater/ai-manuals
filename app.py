@@ -97,3 +97,43 @@ def feedback_summary(days: int = 7) -> List[Dict]:
     ]
 # ---- 4) Serve the tiny front-end ----------------------------
 app.mount("/", StaticFiles(directory="web", html=True), name="web")
+
+# ── 5) low-score chunks (“hall-of-shame”) ─────────────────────────────
+from typing import List, Dict
+from sqlalchemy import text          # already imported earlier
+
+@app.get("/feedback/chunks")
+def worst_chunks(
+        days: int = 30,              # look-back window
+        min_votes: int = 3,          # ignore chunks with <3 votes
+        limit: int = 50              # how many rows to return
+    ) -> List[Dict]:
+    """
+    Returns a list like:
+      [
+        {"chunk_id":"demo01-a1b2c3d4", "total":7, "up":2,
+         "down":5, "up_pct":28.6},
+        ...
+      ]
+    """
+    sql = f"""
+      SELECT
+        unnest(chunks_used) AS chunk_id,
+        COUNT(*)            AS total,
+        SUM(CASE WHEN score =  1 THEN 1 ELSE 0 END) AS up,
+        SUM(CASE WHEN score = -1 THEN 1 ELSE 0 END) AS down,
+        ROUND(100.0 *
+              SUM(CASE WHEN score = 1 THEN 1 ELSE 0 END)::numeric
+              / NULLIF(COUNT(*),0), 1)               AS up_pct
+      FROM   feedback
+      WHERE  ts >= now() - INTERVAL '{days} days'
+      GROUP  BY chunk_id
+      HAVING COUNT(*) >= :min_votes
+      ORDER  BY up_pct ASC, total DESC
+      LIMIT  :limit;
+    """
+
+    with engine.begin() as conn:
+        rows = conn.execute(text(sql),
+                            {"min_votes": min_votes, "limit": limit})
+        return [dict(r) for r in rows]
