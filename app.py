@@ -4,13 +4,12 @@ FastAPI service for AI-Manuals
 ──────────────────────────────
 • /upload              → add a PDF to Pinecone
 • /chat                → ask a question             → {"answer", "chunks_used"}
-• /feedback            → thumbs-up / thumbs-down + chunk IDs
+• /feedback            → thumbs-up / thumbs-down    + chunk IDs
 • /feedback/summary    → daily 👍 / 👎 counts
 • /feedback/chunks     → hall-of-shame per chunk
 • static /             → tiny HTML front-end
 """
 
-from datetime import date
 from typing import List, Dict, Optional
 
 from fastapi import FastAPI, File, UploadFile, Form, HTTPException
@@ -19,12 +18,12 @@ from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel
 from sqlalchemy import text
 
-# ── local modules ────────────────────────────────────────────────
+# ── local modules ─────────────────────────────────────────────
 from ingest_manual import ingest
-from qa_demo       import chat            # returns {"answer", "chunks_used"}
-from db            import engine          # ensures feedback table exists
+from qa_demo       import chat        # returns {"answer", "chunks_used"}
+from db            import engine      # ensures feedback table exists
 
-# ── FastAPI + CORS ───────────────────────────────────────────────
+# ── FastAPI + CORS ────────────────────────────────────────────
 app = FastAPI()
 app.add_middleware(
     CORSMiddleware,
@@ -33,11 +32,11 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
-# ───────────────── 1)  PDF upload ───────────────────────────────
+# ───────────────── 1) PDF upload ──────────────────────────────
 @app.post("/upload")
 async def upload_pdf(
     file: UploadFile = File(...),
-    customer: str   = Form("demo01")
+    customer: str    = Form("demo01")
 ):
     tmp = f"/tmp/{file.filename}"
     with open(tmp, "wb") as f:
@@ -45,22 +44,22 @@ async def upload_pdf(
     ingest(tmp, customer)
     return {"status": "ingested", "file": file.filename}
 
-# ───────────────── 2)  Chat ─────────────────────────────────────
+# ───────────────── 2) Chat ────────────────────────────────────
 @app.post("/chat")
 async def ask(
     question: str = Form(...),
     customer: str = Form("demo01")
 ):
-    return chat(question, customer)       # ⇢ {"answer", "chunks_used"}
+    return chat(question, customer)     # → {"answer", "chunks_used"}
 
-# ───────────────── 3)  Feedback thumbs ─────────────────────────
+# ───────────────── 3) Feedback thumbs ────────────────────────
 class FeedbackIn(BaseModel):
     customer: str
     question: str
     answer:   str
     score:    int                      # +1 👍  or  -1 👎
     chunks_used: Optional[List[str]] = None   # new UI
-    chunks:      Optional[List[str]] = None   # back-compat
+    chunks:      Optional[List[str]] = None   # legacy field
 
 @app.post("/feedback")
 def add_feedback(data: FeedbackIn):
@@ -87,14 +86,14 @@ def add_feedback(data: FeedbackIn):
         )
     return {"ok": True}
 
-# ───────────────── 4)  Daily summary ───────────────────────────
+# ───────────────── 4) Daily summary ──────────────────────────
 @app.get("/feedback/summary")
 def feedback_summary(days: int = 7) -> List[Dict]:
     sql = f"""
       SELECT
-        date_trunc('day', ts)::date               AS day,
-        SUM((score =  1)::int)                   AS up,
-        SUM((score = -1)::int)                   AS down
+        date_trunc('day', ts)::date AS day,
+        SUM((score =  1)::int)      AS up,
+        SUM((score = -1)::int)      AS down
       FROM feedback
       WHERE ts >= now() - INTERVAL '{days} days'
       GROUP BY day
@@ -107,11 +106,11 @@ def feedback_summary(days: int = 7) -> List[Dict]:
             for r in rows
         ]
 
-# ───────────────── 5)  Hall-of-shame chunks ────────────────────
+# ───────────────── 5) Hall-of-shame chunks ───────────────────
 @app.get("/feedback/chunks")
 def worst_chunks(
     days: int      = 30,
-    min_votes: int = 3,
+    min_votes: int = 1,
     limit: int     = 50
 ) -> List[Dict]:
     sql = f"""
@@ -120,8 +119,10 @@ def worst_chunks(
         COUNT(*)                                   AS total,
         SUM((score =  1)::int)                     AS up,
         SUM((score = -1)::int)                     AS down,
-        ROUND(100.0 * SUM((score = 1)::int)::numeric
-                     / NULLIF(COUNT(*),0), 1)      AS up_pct
+        ROUND(
+          100.0 * SUM((score =  1)::int)::numeric / NULLIF(COUNT(*),0),
+          1
+        )                                          AS up_pct
       FROM feedback
       WHERE ts >= now() - INTERVAL '{days} days'
       GROUP BY chunk_id
@@ -132,7 +133,16 @@ def worst_chunks(
     with engine.begin() as conn:
         rows = conn.execute(text(sql),
                             {"min_votes": min_votes, "limit": limit})
-        return [dict(r) for r in rows]
+        out = []
+        for r in rows:
+            out.append({
+                "chunk_id": r.chunk_id,
+                "total":    int(r.total),
+                "up":       int(r.up),
+                "down":     int(r.down),
+                "up_pct":   float(r.up_pct) if r.up_pct is not None else None
+            })
+        return out
 
-# ───────────────── 6)  Serve front-end ─────────────────────────
+# ───────────────── 6) Serve front-end ────────────────────────
 app.mount("/", StaticFiles(directory="web", html=True), name="web")
