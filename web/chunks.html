@@ -1,0 +1,66 @@
+<!DOCTYPE html>
+<html>
+<head>
+  <meta charset="utf-8">
+  <title>Chunk quality dashboard</title>
+  <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
+  <style>
+    body{font-family:sans-serif;max-width:880px;margin:auto;padding:20px}
+    #opt input{width:70px;margin-left:4px}
+    table{border-collapse:collapse;width:100%;margin-top:28px}
+    th,td{border:1px solid #ccc;padding:6px;text-align:center}
+    th{background:#f4f4f4}
+  </style>
+</head>
+<body>
+<h2>📊 Worst-performing chunks</h2>
+
+<div id="opt">
+  Days <input id="days" type="number" min="1" max="60" value="30">
+  Min&nbsp;votes <input id="votes" type="number" min="1" value="1">
+  Limit <input id="limit" type="number" min="1" value="30">
+  <button onclick="load()">↻ Refresh</button>
+</div>
+
+<canvas id="chart" height="120"></canvas>
+
+<table>
+  <thead>
+    <tr><th>Chunk&nbsp;ID</th><th>👍</th><th>👎</th><th>Total</th><th>% 👍</th></tr>
+  </thead>
+  <tbody id="rows"></tbody>
+</table>
+
+<script>
+let chart;
+async function load(){
+  const d=document, qs=q=>d.getElementById(q).value;
+  const url=`/feedback/chunks?days=${qs('days')}&min_votes=${qs('votes')}&limit=${qs('limit')}`;
+  const data=await fetch(url).then(r=>r.json());
+
+  /* ---------- chart ---------- */
+  const labels=data.map(x=>x.chunk_id.slice(-6));
+  const upPct =data.map(x=>x.up_pct);
+  if(chart){
+    chart.data.labels=labels; chart.data.datasets[0].data=upPct; chart.update();
+  }else{
+    chart=new Chart(d.getElementById('chart'),{
+      type:'bar',
+      data:{labels,datasets:[{label:'% 👍',data:upPct}]},
+      options:{scales:{y:{beginAtZero:true,max:100}}}
+    });
+  }
+
+  /* ---------- table ---------- */
+  const rows=d.getElementById('rows'); rows.innerHTML="";
+  data.forEach(x=>{
+    const tr=d.createElement('tr');
+    tr.innerHTML=`<td>${x.chunk_id}</td><td>${x.up}</td><td>${x.down}`+
+                 `</td><td>${x.total}</td><td>${x.up_pct}%</td>`;
+    rows.appendChild(tr);
+  });
+}
+load();
+</script>
+</body>
+</html>
