@@ -46,8 +46,8 @@ class FeedbackIn(BaseModel):
     customer: str
     question: str
     answer:   str
-    score:    int               # +1 / -1
-    chunks_used: list[int] | None = None   # optional array
+    score:    int
+    chunks:   list[int]  | None = None   # ← allow null for old UI
 
 @app.post("/feedback")
 def add_feedback(data: FeedbackIn):
@@ -56,15 +56,16 @@ def add_feedback(data: FeedbackIn):
 
     with engine.begin() as conn:
         conn.execute(
-    text("""
-        INSERT INTO feedback
-          (customer, question, answer, score, chunks_used)
-        VALUES
-          (:customer, :question, :answer, :score, :chunks_used)
-    """),
-    data.model_dump()
-)
+            text("""
+              INSERT INTO feedback
+                (customer, question, answer, score, chunks_used)
+              VALUES
+                (:customer, :question, :answer, :score, :chunks)
+            """),
+            data.model_dump()
+        )
     return {"ok": True}
+
 from datetime import date, timedelta
 from typing import List, Dict
 

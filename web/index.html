@@ -43,7 +43,7 @@ async function ask(){
   /* ===== store context for feedback ===== */
   lastQuestion = q.value;
   lastAnswer   = out.answer;
-  lastChunks   = out.chunks;        // <─ new
+  lastChunks   = out.chunks_used;      //  ←  renamed
   /* ===== render ===== */
   answer.textContent = lastAnswer;
   fb.style.display   = "inline";
@@ -58,13 +58,14 @@ async function sendFeedback(score){
       question:lastQuestion,
       answer:  lastAnswer,
       score:   score,
-      chunks:  lastChunks    // <─ send ids to server
+      chunks_used: lastChunks        //  ←  renamed
     })
   });
-  if((await r.json()).ok){
+  const resp = await r.json();
+  if(resp.ok){
     alert("Thanks for the feedback!");
     fb.style.display="none";
-  }else alert("Hmm, feedback failed");
+  }else alert("Feedback failed: "+JSON.stringify(resp));
 }
 </script>
 </body>
