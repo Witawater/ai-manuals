@@ -1,65 +1,119 @@
 <!DOCTYPE html>
 <html>
 <head>
-  <meta charset="utf-8" />
-  <title>Feedback dashboard</title>
-  <!--  ⬇️ one-file Chart.js from CDN -->
-  <script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.3/dist/chart.umd.min.js"></script>
+  <meta charset="utf-8">
+  <title>AI-Manuals – Feedback dashboard</title>
+  <script src="https://cdn.jsdelivr.net/npm/chart.js@4"></script>
   <style>
-    body { font-family: sans-serif; margin: 2rem; }
-    #period { width: 80px; }
+    body{font-family:sans-serif;max-width:880px;margin:auto;padding:20px}
+    h2{margin-bottom:6px}
+    button.tab{margin-right:8px;padding:6px 12px;cursor:pointer}
+    .hidden{display:none}
+
+    /* table for chunks */
+    table{border-collapse:collapse;width:100%;margin-top:24px}
+    th,td{border:1px solid #ccc;padding:6px;text-align:center}
+    th{background:#f4f4f4}
+    #opts input{width:70px;margin-left:4px}
   </style>
 </head>
 <body>
 
-<h2>📈  Feedback dashboard</h2>
+<h2>📊 Feedback dashboard</h2>
+<button class="tab" onclick="show('daily')">Daily trend</button>
+<button class="tab" onclick="show('chunks')">Chunk quality</button>
 
-<label>
+<!-- ───────── Daily trend section ───────── -->
+<section id="daily">
   Days:
-  <input id="period" type="number" min="1" max="30" value="7"
-         oninput="loadData()">
-</label>
+  <input id="days" type="number" min="1" max="30" value="7" oninput="loadDaily()">
+  <canvas id="trend" height="280"></canvas>
+</section>
 
-<canvas id="chart" width="600" height="300"></canvas>
+<!-- ───────── Chunk quality section ───────── -->
+<section id="chunks" class="hidden">
+  <div id="opts">
+    Days <input id="c_days"   type="number" min="1"  max="60" value="30">
+    Min votes <input id="c_mv" type="number" min="1"          value="1">
+    Limit <input id="c_lim"   type="number" min="1"          value="30">
+    <button onclick="loadChunks()">↻ Refresh</button>
+  </div>
+
+  <canvas id="c_chart" height="120"></canvas>
+
+  <table>
+    <thead>
+      <tr><th>Chunk ID</th><th>👍</th><th>👎</th><th>Total</th><th>% 👍</th></tr>
+    </thead>
+    <tbody id="c_rows"></tbody>
+  </table>
+</section>
 
 <script>
-async function loadData(){
-  const days = document.getElementById('period').value || 7;
-  const url  = `/feedback/summary?days=${days}`;
-  const data = await fetch(url).then(r=>r.json());
+/* ---------- tab toggling ---------- */
+function show(id){
+  document.getElementById('daily').classList.toggle('hidden', id!=='daily');
+  document.getElementById('chunks').classList.toggle('hidden', id!=='chunks');
+}
 
-  // --- unpack for Chart.js ---
-  const labels = data.map(d=>d.day);
-  const ups    = data.map(d=>d.up);
-  const downs  = data.map(d=>d.down);
+/* ---------- daily trend ---------- */
+let trendChart;
+async function loadDaily(){
+  const days=document.getElementById('days').value||7;
+  const data=await fetch(`/feedback/summary?days=${days}`).then(r=>r.json());
 
-  // create / update chart
-  if(window.feedbackChart){
-    feedbackChart.data.labels = labels;
-    feedbackChart.data.datasets[0].data = ups;
-    feedbackChart.data.datasets[1].data = downs;
-    feedbackChart.update();
-    return;
+  const labels=data.map(d=>d.day);
+  const ups   =data.map(d=>d.up);
+  const downs =data.map(d=>d.down);
+
+  if(trendChart){
+    trendChart.data.labels=labels;
+    trendChart.data.datasets[0].data=ups;
+    trendChart.data.datasets[1].data=downs;
+    return trendChart.update();
   }
-  const ctx = document.getElementById('chart');
-  window.feedbackChart = new Chart(ctx, {
-    type: 'bar',
-    data: {
-      labels,
-      datasets: [
-        { label:'👍', data:ups,  stack:'s', order:1 },
-        { label:'👎', data:downs, stack:'s', order:2 },
-      ]
-    },
-    options:{
-      responsive:true,
-      scales:{ x:{ stacked:true }, y:{ beginAtZero:true, stacked:true } }
-    }
+  trendChart=new Chart(document.getElementById('trend'),{
+    type:'bar',
+    data:{labels,datasets:[
+      {label:'👍',data:ups,  stack:'s',order:1},
+      {label:'👎',data:downs,stack:'s',order:2}
+    ]},
+    options:{scales:{x:{stacked:true},y:{beginAtZero:true,stacked:true}}}
   });
 }
 
-// first load
-loadData();
+/* ---------- chunk quality ---------- */
+let chunkChart;
+async function loadChunks(){
+  const qs=id=>document.getElementById(id).value;
+  const url=`/feedback/chunks?days=${qs('c_days')}&min_votes=${qs('c_mv')}&limit=${qs('c_lim')}`;
+  const data=await fetch(url).then(r=>r.json());
+
+  const labels=data.map(x=>x.chunk_id.slice(-6));
+  const pct   =data.map(x=>x.up_pct);
+  if(chunkChart){
+    chunkChart.data.labels=labels;
+    chunkChart.data.datasets[0].data=pct;
+    chunkChart.update();
+  }else{
+    chunkChart=new Chart(document.getElementById('c_chart'),{
+      type:'bar',
+      data:{labels,datasets:[{label:'% 👍',data:pct}]},
+      options:{scales:{y:{beginAtZero:true,max:100}}}
+    });
+  }
+
+  const rows=document.getElementById('c_rows'); rows.innerHTML="";
+  data.forEach(x=>{
+    rows.insertAdjacentHTML('beforeend',
+      `<tr><td>${x.chunk_id}</td><td>${x.up}</td><td>${x.down}`+
+      `</td><td>${x.total}</td><td>${x.up_pct}%</td></tr>`);
+  });
+}
+
+/* first loads */
+loadDaily();
+loadChunks();
 </script>
 </body>
 </html>
