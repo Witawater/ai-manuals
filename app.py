@@ -95,10 +95,8 @@ def feedback_summary(days: int = 7) -> List[Dict]:
         {"day": r.day.isoformat(), "up": int(r.up), "down": int(r.down)}
         for r in rows
     ]
-# ---- 4) Serve the tiny front-end ----------------------------
-app.mount("/", StaticFiles(directory="web", html=True), name="web")
 
-# ── 5) low-score chunks (“hall-of-shame”) ─────────────────────────────
+# ── 4) low-score chunks (“hall-of-shame”) ─────────────────────────────
 from typing import List, Dict
 from sqlalchemy import text          # already imported earlier
 
@@ -137,3 +135,6 @@ def worst_chunks(
         rows = conn.execute(text(sql),
                             {"min_votes": min_votes, "limit": limit})
         return [dict(r) for r in rows]
+
+# ---- 5) Serve the tiny front-end ----------------------------
+app.mount("/", StaticFiles(directory="web", html=True), name="web")
