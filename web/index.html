@@ -1,71 +1,92 @@
 <!DOCTYPE html>
-<html>
+<html lang="en">
 <head>
-  <meta charset="utf-8">
-  <title>AI Manuals Demo</title>
+  <meta charset="utf-8" />
+  <title>AI-Manuals demo</title>
   <style>
-    body{font-family:sans-serif;max-width:680px;margin:auto;padding:20px}
+    body   {font-family:sans-serif;max-width:680px;margin:auto;padding:20px}
     #answer{white-space:pre-wrap;border:1px solid #ccc;padding:12px}
-    .fb{font-size:20px;margin:0 6px;cursor:pointer}
+    .fb    {font-size:20px;margin:0 6px;cursor:pointer}
+    .hide  {display:none}
   </style>
 </head>
 <body>
 <h2>Manual helper</h2>
 
 <h4>Upload a PDF</h4>
-<input type="file" id="pdf">
-<button onclick="upload()">Upload</button><br><br>
+<input type="file" id="pdf" />
+<button onclick="upload()">Upload</button><br /><br />
 
 <h4>Ask a question</h4>
-<input id="q" size="60" placeholder="Type your question…">
-<button onclick="ask()">Ask</button><br><br>
+<input id="q" size="60" placeholder="Type your question…" />
+<button onclick="ask()">Ask</button><br /><br />
 
 <div id="answer"></div>
-<div id="fb" style="display:none;">
+
+<!-- feedback bar -->
+<div id="fb" class="hide">
   <span class="fb" onclick="sendFeedback( 1)">👍</span>
   <span class="fb" onclick="sendFeedback(-1)">👎</span>
 </div>
-<p><a href="/dashboard.html" target="_blank">📊 See feedback dashboard</a></p>
+
+<p>
+  <a href="/dashboard.html" target="_blank">📊 See feedback dashboard</a>
+</p>
 
 <script>
-let lastQuestion="", lastAnswer="", lastChunks=[];
+let lastQuestion = "", lastAnswer = "", lastChunks = [];
 
-async function upload(){
-  const fd=new FormData(); fd.append("file",pdf.files[0]);
-  const r = await fetch("/upload",{method:"POST",body:fd});
-  alert("Uploaded "+ (await r.json()).file);
+/* ========== upload PDF ========== */
+async function upload () {
+  if (!pdf.files[0]) return alert("Choose a PDF first!");
+  const fd = new FormData();
+  fd.append("file", pdf.files[0]);
+
+  const r  = await fetch("/upload", { method: "POST", body: fd });
+  const js = await r.json();
+  alert("Uploaded “" + js.file + "” – ready to ask questions!");
 }
 
-async function ask(){
-  const fd=new FormData(); fd.append("question",q.value);
-  const r  = await fetch("/chat",{method:"POST",body:fd});
-  const out= await r.json();
-  /* ===== store context for feedback ===== */
+/* ========== ask a question ========== */
+async function ask () {
+  if (!q.value.trim()) return;
+
+  const fd = new FormData();
+  fd.append("question", q.value);
+
+  const r  = await fetch("/chat", { method: "POST", body: fd });
+  const js = await r.json();
+
+  /* remember context for feedback */
   lastQuestion = q.value;
-  lastAnswer   = out.answer;
-  lastChunks   = out.chunks_used;      //  ←  renamed
-  /* ===== render ===== */
+  lastAnswer   = js.answer;
+  lastChunks   = js.chunks ?? js.chunks_used ?? [];   // tolerate both keys
+
+  /* render */
   answer.textContent = lastAnswer;
-  fb.style.display   = "inline";
+  fb.classList.remove("hide");
 }
 
-async function sendFeedback(score){
-  const r = await fetch("/feedback",{
-    method:"POST",
-    headers:{"Content-Type":"application/json"},
-    body:JSON.stringify({
-      customer:"demo01",
-      question:lastQuestion,
-      answer:  lastAnswer,
-      score:   score,
-      chunks_used: lastChunks        //  ←  renamed
+/* ========== send thumbs ========== */
+async function sendFeedback (score) {
+  const r = await fetch("/feedback", {
+    method : "POST",
+    headers: { "Content-Type": "application/json" },
+    body   : JSON.stringify({
+      customer   : "demo01",
+      question   : lastQuestion,
+      answer     : lastAnswer,
+      score      : score,
+      chunks_used: lastChunks             // server expects this field name
     })
   });
-  const resp = await r.json();
-  if(resp.ok){
+  const js = await r.json();
+  if (js.ok) {
+    fb.classList.add("hide");
     alert("Thanks for the feedback!");
-    fb.style.display="none";
-  }else alert("Feedback failed: "+JSON.stringify(resp));
+  } else {
+    alert("Feedback failed: " + JSON.stringify(js));
+  }
 }
 </script>
 </body>
