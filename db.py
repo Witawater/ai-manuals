@@ -1,26 +1,28 @@
 """
-Very tiny DB helper.
+Very tiny DB helper
+───────────────────
+Importing *any* module that does:
 
-Importing this module *anywhere* guarantees that the `feedback` table
-(with a `chunks_used text[]` column) exists.
+    from db import engine
 
-The logic is idempotent – you can deploy it any number of times.
+guarantees the `feedback` table (with the **chunks_used text[]** column)
+exists.  All statements are idempotent, so repeated deploys are safe.
 """
 
 import os
 from sqlalchemy import create_engine, text
 
-# ── connection ------------------------------------------------------------
+# ── connection string ──────────────────────────────────────────────────
 DB_URL = os.getenv("DATABASE_URL")          # .env locally / Render in prod
 if not DB_URL:
     raise RuntimeError("DATABASE_URL env var is missing")
 
-# small pool is fine for our scale
+# Small pool is fine for our scale
 engine = create_engine(DB_URL, pool_size=5, max_overflow=0)
 
-# ── one-time bootstrap (runs on first import) -----------------------------
+# ── bootstrap: run once on first import ─────────────────────────────────
 with engine.begin() as conn:
-    # 1) ensure table exists (basic shape)
+    # 1) base table
     conn.execute(text("""
         CREATE TABLE IF NOT EXISTS feedback (
             id          SERIAL PRIMARY KEY,
@@ -32,13 +34,13 @@ with engine.begin() as conn:
         );
     """))
 
-    # 2) ensure `chunks_used` column exists …
+    # 2) ensure chunks_used column exists
     conn.execute(text("""
         ALTER TABLE feedback
-        ADD COLUMN IF NOT EXISTS chunks_used text[];
+        ADD COLUMN IF NOT EXISTS chunks_used  text[];
     """))
 
-    # 3) …and is **text[]** even if an old deploy made it integer[]
+    # 3) …and is typed as text[] even if an old deploy made it integer[]
     conn.execute(text("""
         ALTER TABLE feedback
         ALTER COLUMN chunks_used
