@@ -2,13 +2,15 @@
 """
 qa_demo.py  –  Ask questions against the Pinecone index
 ────────────────────────────────────────────────────────
-Run inside the project root:
+Run from the project root:
 
     source venv/bin/activate
     python qa_demo.py
 """
 
-import os, time, dotenv
+import os
+import time
+import dotenv
 from openai   import OpenAI
 from pinecone import Pinecone, ServerlessSpec, CloudProvider
 
@@ -30,13 +32,15 @@ client = OpenAI(api_key=os.getenv("OPENAI_API_KEY"))
 # ────────────────────────────────────────────────────────────
 # 2.  Ensure the index exists and has correct dimension
 # ────────────────────────────────────────────────────────────
+DIM = 1536  # text-embedding-3-small
+
 if INDEX_NAME not in pc.list_indexes().names():
     print(f"ℹ️  '{INDEX_NAME}' missing — creating an empty one …")
     cloud  = CloudProvider.AWS if "aws" in os.getenv("PINECONE_ENV") else CloudProvider.GCP
     region = os.getenv("PINECONE_ENV").split("-", 1)[-1]
     pc.create_index(
         INDEX_NAME,
-        dimension=1536,                       # text-embedding-3-small
+        dimension=DIM,
         metric="cosine",
         spec=ServerlessSpec(cloud=cloud, region=region),
     )
@@ -45,9 +49,9 @@ if INDEX_NAME not in pc.list_indexes().names():
     print("✅  Index ready — ingest a PDF before chatting.")
 else:
     info = pc.describe_index(INDEX_NAME)
-    if info.dimension != 1536:
+    if info.dimension != DIM:
         raise RuntimeError(
-            f"Index '{INDEX_NAME}' dim {info.dimension} ≠ 1536.\n"
+            f"Index '{INDEX_NAME}' dim {info.dimension} ≠ {DIM}.\n"
             "Delete it or set PINECONE_INDEX to a fresh name."
         )
 
@@ -63,10 +67,10 @@ def chat(
     concise  : bool = False
 ) -> dict:
     """
-    Returns:
+    Returns
       {
-        "answer": "GPT-4o answer …",
-        "chunks": ["demo01-a1b2c3d4", "demo01-e5f6…"]   # IDs used
+        "answer"     : "GPT-4o answer …",
+        "chunks_used": ["demo01-a1b2c3d4", "demo01-e5f6…"]
       }
     """
 
@@ -84,20 +88,22 @@ def chat(
     )
     if not resp.matches:
         return {"answer": "I couldn't find anything relevant in this manual.",
-                "chunks": []}
+                "chunks_used": []}
 
-    # 3-3) GPT-4o re-rank  → keep ≤ 4 chunks
+    # 3-3) GPT-4o re-rank → keep ≤4 chunks
     rerank_prompt = (
         "Which chunks best answer the question?\n\n"
         f"QUESTION:\n{question}\n\n"
         "CHUNKS:\n" +
-        "\n\n".join(f"[{i}] {m.metadata['text']}"
-                    for i, m in enumerate(resp.matches)) +
+        "\n\n".join(
+            f"[{i}] {m.metadata['text'][:500]}"      # cap each chunk to 500 chars
+            for i, m in enumerate(resp.matches)
+        ) +
         "\n\nReturn the numbers of the 4 most relevant chunks, comma-separated."
     )
     best = client.chat.completions.create(
         model=CHAT_MODEL,
-        messages=[{"role":"user","content":rerank_prompt}],
+        messages=[{"role": "user", "content": rerank_prompt}],
         temperature=0
     ).choices[0].message.content
 
@@ -105,14 +111,15 @@ def chat(
     resp.matches = [m for i, m in enumerate(resp.matches) if i in keep_idx]
     if not resp.matches:
         return {"answer": "I couldn't find anything relevant in this manual.",
-                "chunks": []}
+                "chunks_used": []}
 
     # 3-4) build context for final answer
     context_parts = []
     for i, m in enumerate(resp.matches, start=1):
-        title = m.metadata.get("title","").strip()
-        tag   = f"[{i} – {title}]" if title else f"[{i}]"
-        context_parts.append(f"{tag} {m.metadata['text']}")
+        title  = m.metadata.get("title") or ""
+        tag    = f"[{i} – {title}]" if title else f"[{i}]"
+        snippet = m.metadata["text"][:500]           # again cap long chunks
+        context_parts.append(f"{tag} {snippet}")
     context = "\n\n".join(context_parts)
 
     # 3-5) final answer from GPT-4o
@@ -128,22 +135,24 @@ def chat(
     )
     answer = client.chat.completions.create(
         model=CHAT_MODEL,
-        messages=[{"role":"user","content":prompt}],
+        messages=[{"role": "user", "content": prompt}],
         temperature=0
     ).choices[0].message.content.strip()
 
-    # 3-6) collect the *vector IDs* (not the 0-based indexes!)
+    # 3-6) collect *vector IDs* (not the 0-based indexes!)
     chunk_ids = [m.id for m in resp.matches]
 
-    return {"answer": answer, "chunks": chunk_ids}
+    return {"answer": answer, "chunks_used": chunk_ids}
 
 # ────────────────────────────────────────────────────────────
 # 4.  Quick smoke-test
 # ────────────────────────────────────────────────────────────
 if __name__ == "__main__":
-    for q in ["How do I descale the coffee maker?",
-              "Can I change the brew strength?"]:
+    for q in [
+        "How do I descale the coffee maker?",
+        "Can I change the brew strength?"
+    ]:
         print(f"\nQ: {q}")
         out = chat(q)
         print("Answer:", out["answer"])
-        print("Chunks:", out["chunks"])
+        print("Chunks:", out["chunks_used"])
