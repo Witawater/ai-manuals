@@ -35,7 +35,8 @@
 
 
 <script>
-const API_KEY = "15cdb5e8a499c86aeb876c332bade0af";   <!-- hard-code or read from <meta data-apikey=""> -->
+// TODO: replace with <meta data-apikey=""> in production
+const API_KEY = "15cdb5e8a499c86aeb876c332bade0af";
 
 /* helper */
 function authHeaders(extra = {}) {
@@ -49,7 +50,11 @@ async function upload () {
   const fd = new FormData();
   fd.append("file", pdf.files[0]);
 
-  const r  = await fetch("/upload", { method: "POST", body: fd });
+  const r  = await fetch("/upload", {
+    method : "POST",
+    headers: authHeaders(),
+    body   : fd
+  });
   const js = await r.json();
   alert("Uploaded “" + js.file + "” – ready to ask questions!");
 }
@@ -61,7 +66,11 @@ async function ask () {
   const fd = new FormData();
   fd.append("question", q.value);
 
-  const r  = await fetch("/chat", { method: "POST", body: fd });
+  const r  = await fetch("/chat", {
+    method : "POST",
+    headers: authHeaders(),
+    body   : fd
+  });
   const js = await r.json();
 
   /* remember context for feedback */
@@ -78,7 +87,10 @@ async function ask () {
 async function sendFeedback (score) {
   const r = await fetch("/feedback", {
     method : "POST",
-    headers: { "Content-Type": "application/json" },
+    headers: {
+      ...authHeaders(),
+      "Content-Type": "application/json"
+    },
     body   : JSON.stringify({
       customer   : "demo01",
       question   : lastQuestion,

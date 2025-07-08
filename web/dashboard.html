@@ -50,6 +50,12 @@
 </section>
 
 <script>
+const API_KEY = "supersecret123";   <!-- hard-code or read from <meta data-apikey=""> -->
+
+/* helper */
+function authHeaders(extra = {}) {
+  return { "X-API-Key": API_KEY, ...extra };
+}
 /* ---------- tab toggling ---------- */
 function show(id){
   document.getElementById('daily').classList.toggle('hidden', id!=='daily');
