@@ -2,28 +2,31 @@
 """
 FastAPI service for AI-Manuals
 ──────────────────────────────
-• /upload              → add a PDF to Pinecone
-• /chat                → ask a question             → {"answer", "chunks_used"}
-• /feedback            → thumbs-up / thumbs-down    + chunk IDs
-• /feedback/summary    → daily 👍 / 👎 counts
-• /feedback/chunks     → hall-of-shame per chunk
-• static /             → tiny HTML front-end
+• POST /upload            – add a PDF to Pinecone
+• POST /chat              – ask a question → {"answer", "chunks_used"}
+• POST /feedback          – thumbs-up / thumbs-down + chunk IDs
+• GET  /feedback/summary  – daily 👍 / 👎 counts
+• GET  /feedback/chunks   – hall-of-shame per chunk
+• static /                – tiny HTML front-end
 """
 
 from typing import List, Dict, Optional
 
-from fastapi import FastAPI, File, UploadFile, Form, HTTPException
+from fastapi import (
+    FastAPI, File, UploadFile, Form, HTTPException, Depends
+)
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel
 from sqlalchemy import text
 
-# ── local modules ─────────────────────────────────────────────
+# ── local modules ───────────────────────────────────────────────
 from ingest_manual import ingest
-from qa_demo       import chat        # returns {"answer", "chunks_used"}
-from db            import engine      # ensures feedback table exists
+from qa_demo       import chat                # returns {"answer", "chunks_used"}
+from auth          import require_api_key     # <- NEW guard
+from db            import engine              # ensures feedback table exists
 
-# ── FastAPI + CORS ────────────────────────────────────────────
+# ── FastAPI + CORS ──────────────────────────────────────────────
 app = FastAPI()
 app.add_middleware(
     CORSMiddleware,
@@ -32,8 +35,8 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
-# ───────────────── 1) PDF upload ──────────────────────────────
-@app.post("/upload")
+# ────────── 1) PDF upload ───────────────────────────────────────
+@app.post("/upload", dependencies=[Depends(require_api_key)])
 async def upload_pdf(
     file: UploadFile = File(...),
     customer: str    = Form("demo01")
@@ -44,15 +47,15 @@ async def upload_pdf(
     ingest(tmp, customer)
     return {"status": "ingested", "file": file.filename}
 
-# ───────────────── 2) Chat ────────────────────────────────────
-@app.post("/chat")
+# ────────── 2) Chat ─────────────────────────────────────────────
+@app.post("/chat", dependencies=[Depends(require_api_key)])
 async def ask(
     question: str = Form(...),
     customer: str = Form("demo01")
 ):
-    return chat(question, customer)     # → {"answer", "chunks_used"}
+    return chat(question, customer)           # → {"answer", "chunks_used"}
 
-# ───────────────── 3) Feedback thumbs ────────────────────────
+# ────────── 3) Feedback thumbs ─────────────────────────────────
 class FeedbackIn(BaseModel):
     customer: str
     question: str
@@ -61,7 +64,7 @@ class FeedbackIn(BaseModel):
     chunks_used: Optional[List[str]] = None   # new UI
     chunks:      Optional[List[str]] = None   # legacy field
 
-@app.post("/feedback")
+@app.post("/feedback", dependencies=[Depends(require_api_key)])
 def add_feedback(data: FeedbackIn):
     if data.score not in (-1, 1):
         raise HTTPException(400, "score must be +1 or -1")
@@ -81,12 +84,12 @@ def add_feedback(data: FeedbackIn):
                 "question": data.question,
                 "answer":   data.answer,
                 "score":    data.score,
-                "chunks":   chunk_ids
-            }
+                "chunks":   chunk_ids,
+            },
         )
     return {"ok": True}
 
-# ───────────────── 4) Daily summary ──────────────────────────
+# ────────── 4) Daily summary ───────────────────────────────────
 @app.get("/feedback/summary")
 def feedback_summary(days: int = 7) -> List[Dict]:
     sql = f"""
@@ -106,7 +109,7 @@ def feedback_summary(days: int = 7) -> List[Dict]:
             for r in rows
         ]
 
-# ───────────────── 5) Hall-of-shame chunks ───────────────────
+# ────────── 5) Hall-of-shame chunks ────────────────────────────
 @app.get("/feedback/chunks")
 def worst_chunks(
     days: int      = 30,
@@ -133,16 +136,16 @@ def worst_chunks(
     with engine.begin() as conn:
         rows = conn.execute(text(sql),
                             {"min_votes": min_votes, "limit": limit})
-        out = []
-        for r in rows:
-            out.append({
+        return [
+            {
                 "chunk_id": r.chunk_id,
                 "total":    int(r.total),
                 "up":       int(r.up),
                 "down":     int(r.down),
-                "up_pct":   float(r.up_pct) if r.up_pct is not None else None
-            })
-        return out
+                "up_pct":   float(r.up_pct) if r.up_pct is not None else None,
+            }
+            for r in rows
+        ]
 
-# ───────────────── 6) Serve front-end ────────────────────────
+# ────────── 6) Serve front-end ─────────────────────────────────
 app.mount("/", StaticFiles(directory="web", html=True), name="web")

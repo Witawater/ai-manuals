@@ -35,6 +35,12 @@
 
 
 <script>
+const API_KEY = "15cdb5e8a499c86aeb876c332bade0af";   <!-- hard-code or read from <meta data-apikey=""> -->
+
+/* helper */
+function authHeaders(extra = {}) {
+  return { "X-API-Key": API_KEY, ...extra };
+}
 let lastQuestion = "", lastAnswer = "", lastChunks = [];
 
 /* ========== upload PDF ========== */
