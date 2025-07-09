@@ -8,8 +8,7 @@ CLI smoke-test:
     python qa_demo.py
 """
 
-import os
-import time
+import os, time
 from typing import Dict, List
 
 import dotenv
@@ -24,7 +23,7 @@ dotenv.load_dotenv(".env")
 EMBED_MODEL = os.getenv("OPENAI_EMBED_MODEL", "text-embedding-3-small")
 CHAT_MODEL  = os.getenv("OPENAI_CHAT_MODEL",  "gpt-4o")
 INDEX_NAME  = os.getenv("PINECONE_INDEX",     "manuals-small")
-DIM         = 1536                              # text-embedding-3-small
+DIM         = 1536                            # text-embedding-3-small
 
 pc = Pinecone(
     api_key     = os.getenv("PINECONE_API_KEY"),
@@ -67,7 +66,7 @@ def chat(
     customer : str = "demo01",
     top_k    : int = 30,
     concise  : bool = False,
-    fallback : bool = True,      # ← allow GPT fallback
+    fallback : bool = True,      # allow GPT fallback
     rerank_keep : int = 4        # how many chunks after re-rank
 ) -> Dict[str, object]:
     """
@@ -79,12 +78,12 @@ def chat(
       }
     """
 
-    # --- 3-1) embed the question -----------------------------------------
+    # 3-1) embed the question
     q_vec = client.embeddings.create(
         model=EMBED_MODEL, input=[question]
     ).data[0].embedding
 
-    # --- 3-2) similarity search ------------------------------------------
+    # 3-2) similarity search
     resp = idx.query(
         vector=q_vec,
         top_k=top_k,
@@ -93,13 +92,13 @@ def chat(
     )
 
     have_docs = bool(resp.matches) and resp.matches[0].score > 0.75
-
     if not have_docs and not fallback:
         return {"answer": "I couldn't find anything relevant in this manual.",
                 "chunks_used": [],
                 "grounded": True}
 
-    if not have_docs:  # ── 3-A) GPT fallback ─────────────────────────────
+    # 3-A) GPT fallback if no suitable chunks
+    if not have_docs:
         sys_prompt = (
             "You are a knowledgeable support agent. "
             "The official manual does not cover the user's question. "
@@ -119,46 +118,43 @@ def chat(
                 "chunks_used": [],
                 "grounded": False}
 
-    # --- 3-3) GPT-4o re-rank → keep N chunks -----------------------------
-  rerank_prompt = (
+    # 3-3) GPT-4o re-rank → keep top N chunks
+    rerank_prompt = (
         "Which chunks best answer the question?\n\n"
         f"QUESTION:\n{question}\n\n"
         "CHUNKS:\n" +
         "\n\n".join(f"[{i}] {m.metadata['text']}"
                     for i, m in enumerate(resp.matches)) +
-        "\n\nReturn ONLY the numbers of the 4 most relevant chunks, "
-        "comma-separated (e.g. 0,2,3,7)."
+        f"\n\nReturn ONLY the numbers of the {rerank_keep} most relevant "
+        "chunks, comma-separated (e.g. 0,2,3,7)."
     )
-
     best = client.chat.completions.create(
         model=CHAT_MODEL,
         messages=[{"role": "user", "content": rerank_prompt}],
         temperature=0
     ).choices[0].message.content.strip()
 
-    # parse something like "1, 4,0 ,2"
     keep = {int(x) for x in best.split(",") if x.strip().isdigit()}
+    resp.matches = (
+        [m for i, m in enumerate(resp.matches) if i in keep][:rerank_keep]
+        if keep else
+        resp.matches[:rerank_keep]
+    )
 
-    # ⬇️ NEW: if GPT gave us nothing usable, keep the first 4 similarity hits
-    if not keep:
-        resp.matches = resp.matches[:4]
-    else:
-        resp.matches = [m for i, m in enumerate(resp.matches) if i in keep][:4]
-
-    if not resp.matches:        # still nothing? then we really have no context
+    if not resp.matches:
         return {"answer": "I couldn't find anything relevant in this manual.",
                 "chunks_used": [], "grounded": False}
 
-    # --- 3-4) build context ---------------------------------------------
+    # 3-4) build context
     context_parts: List[str] = []
     for i, m in enumerate(resp.matches, start=1):
-        title   = m.metadata.get("title") or ""
-        tag     = f"[{i} – {title}]" if title else f"[{i}]"
+        title = m.metadata.get("title") or ""
+        tag   = f"[{i} – {title}]" if title else f"[{i}]"
         snippet = m.metadata["text"][:500]
         context_parts.append(f"{tag} {snippet}")
     context = "\n\n".join(context_parts)
 
-    # --- 3-5) final answer ----------------------------------------------
+    # 3-5) final answer
     prompt = (
         "You are a helpful support agent. ONLY use the context below.\n\n"
         f"{context}\n\n" +
@@ -173,20 +169,20 @@ def chat(
         temperature=0
     ).choices[0].message.content.strip()
 
-    chunk_ids = [m.id for m in resp.matches]
-
-    return {"answer":      answer,
-            "chunks_used": chunk_ids,
-            "grounded":    True}
+    return {
+        "answer":      answer,
+        "chunks_used": [m.id for m in resp.matches],
+        "grounded":    True,
+    }
 
 # ────────────────────────────────────────────────────────────
-# 4.  Smoke-test when run directly
+# 4.  Smoke-test
 # ────────────────────────────────────────────────────────────
 if __name__ == "__main__":
     for q in [
         "How do I descale the coffee maker?",
         "Can I change the brew strength?",
-        "What is 2 + 2?"                  # should trigger fallback
+        "What is 2 + 2?"  # should trigger fallback
     ]:
         print(f"\nQ: {q}")
         out = chat(q)
