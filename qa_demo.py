@@ -120,30 +120,34 @@ def chat(
                 "grounded": False}
 
     # --- 3-3) GPT-4o re-rank → keep N chunks -----------------------------
-    rerank_prompt = (
+  rerank_prompt = (
         "Which chunks best answer the question?\n\n"
         f"QUESTION:\n{question}\n\n"
         "CHUNKS:\n" +
-        "\n\n".join(
-            f"[{i}] {m.metadata['text'][:500]}"
-            for i, m in enumerate(resp.matches)
-        ) +
-        f"\n\nReturn the numbers of the {rerank_keep} most relevant chunks, "
-        "comma-separated."
+        "\n\n".join(f"[{i}] {m.metadata['text']}"
+                    for i, m in enumerate(resp.matches)) +
+        "\n\nReturn ONLY the numbers of the 4 most relevant chunks, "
+        "comma-separated (e.g. 0,2,3,7)."
     )
-    chosen = client.chat.completions.create(
+
+    best = client.chat.completions.create(
         model=CHAT_MODEL,
         messages=[{"role": "user", "content": rerank_prompt}],
         temperature=0
-    ).choices[0].message.content
-    keep_idx = {int(x) for x in chosen.split(",") if x.strip().isdigit()}
-    resp.matches = [m for i, m in enumerate(resp.matches) if i in keep_idx]
+    ).choices[0].message.content.strip()
 
-    if not resp.matches:
-        # Should be rare — treat as “no docs”
+    # parse something like "1, 4,0 ,2"
+    keep = {int(x) for x in best.split(",") if x.strip().isdigit()}
+
+    # ⬇️ NEW: if GPT gave us nothing usable, keep the first 4 similarity hits
+    if not keep:
+        resp.matches = resp.matches[:4]
+    else:
+        resp.matches = [m for i, m in enumerate(resp.matches) if i in keep][:4]
+
+    if not resp.matches:        # still nothing? then we really have no context
         return {"answer": "I couldn't find anything relevant in this manual.",
-                "chunks_used": [],
-                "grounded": True}
+                "chunks_used": [], "grounded": False}
 
     # --- 3-4) build context ---------------------------------------------
     context_parts: List[str] = []
