@@ -2,7 +2,7 @@
 """
 qa_demo.py  –  Ask questions against the Pinecone index
 ────────────────────────────────────────────────────────
-Run from the project root:
+CLI smoke-test:
 
     source venv/bin/activate
     python qa_demo.py
@@ -10,6 +10,8 @@ Run from the project root:
 
 import os
 import time
+from typing import Dict, List
+
 import dotenv
 from openai   import OpenAI
 from pinecone import Pinecone, ServerlessSpec, CloudProvider
@@ -22,22 +24,22 @@ dotenv.load_dotenv(".env")
 EMBED_MODEL = os.getenv("OPENAI_EMBED_MODEL", "text-embedding-3-small")
 CHAT_MODEL  = os.getenv("OPENAI_CHAT_MODEL",  "gpt-4o")
 INDEX_NAME  = os.getenv("PINECONE_INDEX",     "manuals-small")
+DIM         = 1536                              # text-embedding-3-small
 
 pc = Pinecone(
     api_key     = os.getenv("PINECONE_API_KEY"),
-    environment = os.getenv("PINECONE_ENV"),      # e.g. aws-us-east-1
+    environment = os.getenv("PINECONE_ENV") or "",   # e.g. aws-us-east-1
 )
 client = OpenAI(api_key=os.getenv("OPENAI_API_KEY"))
 
 # ────────────────────────────────────────────────────────────
-# 2.  Ensure the index exists and has correct dimension
+# 2.  Ensure the index exists & dimension matches
 # ────────────────────────────────────────────────────────────
-DIM = 1536  # text-embedding-3-small
-
 if INDEX_NAME not in pc.list_indexes().names():
     print(f"ℹ️  '{INDEX_NAME}' missing — creating an empty one …")
-    cloud  = CloudProvider.AWS if "aws" in os.getenv("PINECONE_ENV") else CloudProvider.GCP
-    region = os.getenv("PINECONE_ENV").split("-", 1)[-1]
+    cloud  = CloudProvider.AWS if "aws" in os.getenv("PINECONE_ENV", "") \
+            else CloudProvider.GCP
+    region = os.getenv("PINECONE_ENV", "").split("-", 1)[-1] or "us-east1"
     pc.create_index(
         INDEX_NAME,
         dimension=DIM,
@@ -52,10 +54,10 @@ else:
     if info.dimension != DIM:
         raise RuntimeError(
             f"Index '{INDEX_NAME}' dim {info.dimension} ≠ {DIM}.\n"
-            "Delete it or set PINECONE_INDEX to a fresh name."
+            "Delete it or point PINECONE_INDEX to a fresh name."
         )
 
-idx = pc.Index(INDEX_NAME)        # host auto-resolved
+idx = pc.Index(INDEX_NAME)   # host auto-resolved
 
 # ────────────────────────────────────────────────────────────
 # 3.  Q-and-A helper
@@ -64,74 +66,102 @@ def chat(
     question : str,
     customer : str = "demo01",
     top_k    : int = 30,
-    concise  : bool = False
-) -> dict:
+    concise  : bool = False,
+    fallback : bool = True,      # ← allow GPT fallback
+    rerank_keep : int = 4        # how many chunks after re-rank
+) -> Dict[str, object]:
     """
     Returns
       {
-        "answer"     : "GPT-4o answer …",
-        "chunks_used": ["demo01-a1b2c3d4", "demo01-e5f6…"]
+        "answer"     : "...",
+        "chunks_used": ["vec-id-1", …],   # 0-length if fallback
+        "grounded"   : bool               # True = from manual
       }
     """
 
-    # 3-1) embed the question
+    # --- 3-1) embed the question -----------------------------------------
     q_vec = client.embeddings.create(
         model=EMBED_MODEL, input=[question]
     ).data[0].embedding
 
-    # 3-2) initial similarity search
+    # --- 3-2) similarity search ------------------------------------------
     resp = idx.query(
         vector=q_vec,
         top_k=top_k,
         filter={"customer": {"$eq": customer}},
         include_metadata=True
     )
-    if not resp.matches:
-        return {"answer": "I couldn't find anything relevant in this manual.",
-                "chunks_used": []}
 
-    # 3-3) GPT-4o re-rank → keep ≤4 chunks
+    have_docs = bool(resp.matches) and resp.matches[0].score > 0.75
+
+    if not have_docs and not fallback:
+        return {"answer": "I couldn't find anything relevant in this manual.",
+                "chunks_used": [],
+                "grounded": True}
+
+    if not have_docs:  # ── 3-A) GPT fallback ─────────────────────────────
+        sys_prompt = (
+            "You are a knowledgeable support agent. "
+            "The official manual does not cover the user's question. "
+            "Answer from general domain knowledge only if you are confident, "
+            "and preface with '(General guidance – not in manual)'."
+        )
+        answer = client.chat.completions.create(
+            model=CHAT_MODEL,
+            messages=[
+                {"role": "system", "content": sys_prompt},
+                {"role": "user",   "content": question},
+            ],
+            temperature=0.3
+        ).choices[0].message.content.strip()
+
+        return {"answer": answer,
+                "chunks_used": [],
+                "grounded": False}
+
+    # --- 3-3) GPT-4o re-rank → keep N chunks -----------------------------
     rerank_prompt = (
         "Which chunks best answer the question?\n\n"
         f"QUESTION:\n{question}\n\n"
         "CHUNKS:\n" +
         "\n\n".join(
-            f"[{i}] {m.metadata['text'][:500]}"      # cap each chunk to 500 chars
+            f"[{i}] {m.metadata['text'][:500]}"
             for i, m in enumerate(resp.matches)
         ) +
-        "\n\nReturn the numbers of the 4 most relevant chunks, comma-separated."
+        f"\n\nReturn the numbers of the {rerank_keep} most relevant chunks, "
+        "comma-separated."
     )
-    best = client.chat.completions.create(
+    chosen = client.chat.completions.create(
         model=CHAT_MODEL,
         messages=[{"role": "user", "content": rerank_prompt}],
         temperature=0
     ).choices[0].message.content
-
-    keep_idx = {int(x) for x in best.split(",") if x.strip().isdigit()}
+    keep_idx = {int(x) for x in chosen.split(",") if x.strip().isdigit()}
     resp.matches = [m for i, m in enumerate(resp.matches) if i in keep_idx]
-    if not resp.matches:
-        return {"answer": "I couldn't find anything relevant in this manual.",
-                "chunks_used": []}
 
-    # 3-4) build context for final answer
-    context_parts = []
+    if not resp.matches:
+        # Should be rare — treat as “no docs”
+        return {"answer": "I couldn't find anything relevant in this manual.",
+                "chunks_used": [],
+                "grounded": True}
+
+    # --- 3-4) build context ---------------------------------------------
+    context_parts: List[str] = []
     for i, m in enumerate(resp.matches, start=1):
-        title  = m.metadata.get("title") or ""
-        tag    = f"[{i} – {title}]" if title else f"[{i}]"
-        snippet = m.metadata["text"][:500]           # again cap long chunks
+        title   = m.metadata.get("title") or ""
+        tag     = f"[{i} – {title}]" if title else f"[{i}]"
+        snippet = m.metadata["text"][:500]
         context_parts.append(f"{tag} {snippet}")
     context = "\n\n".join(context_parts)
 
-    # 3-5) final answer from GPT-4o
+    # --- 3-5) final answer ----------------------------------------------
     prompt = (
         "You are a helpful support agent. ONLY use the context below.\n\n"
         f"{context}\n\n" +
-        (
-            "Answer in 2-4 sentences and cite tags like [1] or [2]."
-            if concise else
-            "Write a complete answer, including any useful details from the context. "
-            "Cite the tags you used, e.g. [1] or [2]."
-        )
+        ("Answer in 2-4 sentences and cite tags like [1] or [2]."
+         if concise else
+         "Write a complete answer, including any useful details from the "
+         "context. Cite the tags you used, e.g. [1] or [2].")
     )
     answer = client.chat.completions.create(
         model=CHAT_MODEL,
@@ -139,20 +169,23 @@ def chat(
         temperature=0
     ).choices[0].message.content.strip()
 
-    # 3-6) collect *vector IDs* (not the 0-based indexes!)
     chunk_ids = [m.id for m in resp.matches]
 
-    return {"answer": answer, "chunks_used": chunk_ids}
+    return {"answer":      answer,
+            "chunks_used": chunk_ids,
+            "grounded":    True}
 
 # ────────────────────────────────────────────────────────────
-# 4.  Quick smoke-test
+# 4.  Smoke-test when run directly
 # ────────────────────────────────────────────────────────────
 if __name__ == "__main__":
     for q in [
         "How do I descale the coffee maker?",
-        "Can I change the brew strength?"
+        "Can I change the brew strength?",
+        "What is 2 + 2?"                  # should trigger fallback
     ]:
         print(f"\nQ: {q}")
         out = chat(q)
         print("Answer:", out["answer"])
         print("Chunks:", out["chunks_used"])
+        print("Grounded:", out["grounded"])
