@@ -1,6 +1,5 @@
 # auth.py  ─────────────────────────────────────────────
 from dotenv import load_dotenv; load_dotenv(".env")
-
 import os
 from fastapi import Depends, HTTPException, status
 from fastapi.security import APIKeyHeader
