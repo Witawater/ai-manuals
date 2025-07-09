@@ -78,9 +78,16 @@ async function ask () {
   lastAnswer   = js.answer;
   lastChunks   = js.chunks ?? js.chunks_used ?? [];   // tolerate both keys
 
-  /* render */
-  answer.textContent = lastAnswer;
-  fb.classList.remove("hide");
+  /* ---------- render answer ---------- */
+  if (js.grounded === false) {
+    // came from GPT fallback (not found in manual)
+    answer.innerHTML =
+      `<i>${js.answer}</i><br><small>⚠︎ Not from manual</small>`;
+  } else {
+    // normal grounded answer
+    answer.textContent = js.answer;
+  }
+  fb.classList.remove("hide");      // show 👍/👎 buttons
 }
 
 /* ========== send thumbs ========== */
