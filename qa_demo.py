@@ -91,7 +91,12 @@ def chat(
         include_metadata=True
     )
 
-    have_docs = bool(resp.matches) and resp.matches[0].score > 0.75
+    print(f"ℹ️ Top {len(resp.matches)} retrieved chunks:")
+    for i, m in enumerate(resp.matches):
+        snippet = m.metadata.get("text", "")[:75].replace("\n", " ")
+        print(f"  [{i}] score={m.score:.4f} preview='{snippet}...'")
+
+    have_docs = bool(resp.matches) and resp.matches[0].score > 0.65
     if not have_docs and not fallback:
         return {"answer": "I couldn't find anything relevant in this manual.",
                 "chunks_used": [],
@@ -134,6 +139,8 @@ def chat(
         temperature=0
     ).choices[0].message.content.strip()
 
+    print(f"ℹ️ Rerank selected chunk indices: {best}")
+
     keep = {int(x) for x in best.split(",") if x.strip().isdigit()}
     resp.matches = (
         [m for i, m in enumerate(resp.matches) if i in keep][:rerank_keep]
@@ -154,6 +161,8 @@ def chat(
         context_parts.append(f"{tag} {snippet}")
     context = "\n\n".join(context_parts)
 
+    print(f"ℹ️ Context used for grounding:\n{context}")
+
     # 3-5) final answer
     prompt = (
         "You are a helpful support agent. ONLY use the context below.\n\n"
@@ -168,6 +177,8 @@ def chat(
         messages=[{"role": "user", "content": prompt}],
         temperature=0
     ).choices[0].message.content.strip()
+
+    print(f"ℹ️ Final answer:\n{answer}")
 
     return {
         "answer":      answer,
