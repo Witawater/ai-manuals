@@ -161,13 +161,13 @@ def chat(
 
     # 3-3) GPT-4o re-rank → keep top N chunks
     rerank_prompt = (
-        "Which chunks best answer the question?\n\n"
+        "Select the most relevant chunks that directly answer the question. Think step-by-step.\n\n"
         f"QUESTION:\n{normalized_question}\n\n"
         "CHUNKS:\n" +
         "\n\n".join(f"[{i}] ({m.metadata.get('title', 'No Title')}) {m.metadata['text']}"
                     for i, m in enumerate(resp.matches)) +
         "\n\nNote: If the question refers to tubing, prioritize chunks with keywords like tubing, hose, ID, fittings, M16x1, or temperature rating. Give preference to chunks whose section title is clearly related.\n\n"
-        f"Return ONLY the numbers of the {rerank_keep} most relevant chunks, comma-separated (e.g. 0,2,3,7)."
+        f"Return ONLY the numbers of the {rerank_keep} most relevant chunks, comma-separated (e.g. 0,2,3,7). If none are clearly relevant, return an empty list."
     )
     best = client.chat.completions.create(
         model=CHAT_MODEL,
@@ -195,9 +195,12 @@ def chat(
     # 3-4) build context
     context_parts: List[str] = []
     for i, m in enumerate(resp.matches, start=1):
-        title = m.metadata.get("title") or ""
-        tag   = f"[{i} – {title}]" if title else f"[{i}]"
-        snippet = m.metadata["text"].split("\n")[0][:300]
+        title = (m.metadata.get("title") or "").strip()
+        tag = f"[{i} – {title}]" if title else f"[{i}]"
+        snippet = m.metadata.get("text", "").strip().split("\n")[0][:300]
+        if DEBUG:
+            debug_tag = f"[CHUNK {i}] score={m.score:.3f}"
+            print(f"ℹ️ Using chunk: {debug_tag} {tag} {snippet[:60]}...")
         context_parts.append(f"{tag} {snippet}")
     context = "\n\n".join(context_parts)
 
