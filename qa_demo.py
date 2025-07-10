@@ -78,6 +78,27 @@ def chat(
       }
     """
 
+    # 3-2) similarity search
+    resp = idx.query(
+        vector=None,
+        top_k=top_k,
+        filter={"customer": {"$eq": customer}},
+        include_metadata=True
+    )
+
+    import re
+
+    def normalize_question(q: str, product_name: str) -> str:
+        return re.sub(r"\b(the\s)?(machine|unit|device|appliance)\b", product_name, q, flags=re.IGNORECASE)
+
+    # Try to infer product name from metadata
+    product_name = "machine"  # default
+    if resp.matches:
+        product_name = resp.matches[0].metadata.get("product", "machine")
+
+    # Normalize question before embedding
+    question = normalize_question(question, product_name)
+
     # 3-1) embed the question
     q_vec = client.embeddings.create(
         model=EMBED_MODEL, input=[question]
