@@ -71,7 +71,7 @@ def pdf_to_chunks(path: str) -> Tuple[List[str], List[dict]]:
     current_lines: List[str] = []
 
     with pdfplumber.open(path) as pdf:
-        for page in pdf.pages:
+        for page_num, page in enumerate(pdf.pages, start=1):
             for line in (page.extract_text() or "").splitlines():
                 if line.isupper() or line.startswith(("Using", "Cleaning", "To ")):
                     # Save previous section if exists
@@ -90,12 +90,16 @@ def pdf_to_chunks(path: str) -> Tuple[List[str], List[dict]]:
     # Now chunk each section into token-sized pieces with overlap
     for title, lines in sections:
         buffer: List[str] = []
+        # page_num for metas, but we only know section's page if we track it; fallback to None
+        page_num = None
         for line in lines:
             buffer.append(line)
             if token_len(buffer) >= CHUNK_TOKENS:
                 chunk_text = "\n".join(buffer)
+                if token_len(chunk_text) < 10:
+                    continue
                 chunks.append(chunk_text)
-                metas.append({"title": title, "product": product})
+                metas.append({"title": title, "product": product, "page": page_num})
                 # keep overlap tokens as bridge for next chunk
                 encoded = enc.encode(chunk_text)
                 overlap_tokens = encoded[-OVERLAP:] if len(encoded) > OVERLAP else encoded
@@ -103,8 +107,10 @@ def pdf_to_chunks(path: str) -> Tuple[List[str], List[dict]]:
                 buffer = [overlap_text]
         # flush remainder
         if buffer:
-            chunks.append("\n".join(buffer))
-            metas.append({"title": title, "product": product})
+            chunk_text = "\n".join(buffer)
+            if token_len(chunk_text) >= 10:
+                chunks.append(chunk_text)
+                metas.append({"title": title, "product": product, "page": page_num})
 
     return chunks, metas
 
@@ -168,7 +174,7 @@ def ingest(path: str, customer: str = "demo01") -> None:
                 "customer": customer,
                 "chunk":    i,
                 "title":    metas[i]["title"],
-                "text":     chunks[i][:200],   # preview for debugging
+                "text":     chunks[i].split("\n")[0][:200],   # preview for debugging: first line
                 "product":  metas[i]["product"],
             },
         )

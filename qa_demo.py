@@ -20,6 +20,8 @@ from pinecone import Pinecone, ServerlessSpec, CloudProvider
 # ────────────────────────────────────────────────────────────
 dotenv.load_dotenv(".env")
 
+DEBUG = True
+
 EMBED_MODEL = os.getenv("embedding_model", "text-embedding-3-large")
 CHAT_MODEL  = os.getenv("OPENAI_CHAT_MODEL",  "gpt-4o")
 INDEX_NAME  = os.getenv("PINECONE_INDEX",     "manuals-small")
@@ -35,7 +37,7 @@ client = OpenAI(api_key=os.getenv("OPENAI_API_KEY"))
 # 2.  Ensure the index exists & dimension matches
 # ────────────────────────────────────────────────────────────
 if INDEX_NAME not in pc.list_indexes().names():
-    print(f"ℹ️  '{INDEX_NAME}' missing — creating an empty one …")
+    if DEBUG: print(f"ℹ️  '{INDEX_NAME}' missing — creating an empty one …")
     cloud  = CloudProvider.AWS if "aws" in os.getenv("PINECONE_ENV", "") \
             else CloudProvider.GCP
     region = os.getenv("PINECONE_ENV", "").split("-", 1)[-1] or "us-east1"
@@ -47,7 +49,7 @@ if INDEX_NAME not in pc.list_indexes().names():
     )
     while not pc.describe_index(INDEX_NAME).status["ready"]:
         time.sleep(2)
-    print("✅  Index ready — ingest a PDF before chatting.")
+    if DEBUG: print("✅  Index ready — ingest a PDF before chatting.")
 else:
     info = pc.describe_index(INDEX_NAME)
     if info.dimension != DIM:
@@ -74,7 +76,8 @@ def chat(
       {
         "answer"     : "...",
         "chunks_used": ["vec-id-1", …],   # 0-length if fallback
-        "grounded"   : bool               # True = from manual
+        "grounded"   : bool,              # True = from manual
+        "confidence" : float              # confidence score 0-1
       }
     """
 
@@ -117,16 +120,21 @@ def chat(
         include_metadata=True
     )
 
-    print(f"ℹ️ Top {len(resp.matches)} retrieved chunks:")
-    for i, m in enumerate(resp.matches):
-        snippet = m.metadata.get("text", "")[:75].replace("\n", " ")
-        print(f"  [{i}] score={m.score:.4f} preview='{snippet}...'")
+    if DEBUG:
+        print(f"ℹ️ Top {len(resp.matches)} retrieved chunks:")
+        for i, m in enumerate(resp.matches):
+            snippet = m.metadata.get("text", "").split("\n")[0][:300].replace("\n", " ")
+            print(f"  [{i}] score={m.score:.4f} preview='{snippet}...'")
 
-    have_docs = bool(resp.matches) and resp.matches[0].score > 0.50
+    # Use average score of top 2 chunks for fallback decision
+    top_scores = [m.score for m in resp.matches[:2]]
+    avg_top_score = sum(top_scores)/len(top_scores) if top_scores else 0.0
+    have_docs = bool(resp.matches) and avg_top_score > 0.50
     if not have_docs and not fallback:
         return {"answer": "I couldn't find anything relevant in this manual.",
                 "chunks_used": [],
-                "grounded": True}
+                "grounded": True,
+                "confidence": 0.0}
 
     # 3-A) GPT fallback if no suitable chunks
     if not have_docs:
@@ -148,7 +156,8 @@ def chat(
 
         return {"answer": answer,
                 "chunks_used": [],
-                "grounded": False}
+                "grounded": False,
+                "confidence": 0.5}
 
     # 3-3) GPT-4o re-rank → keep top N chunks
     rerank_prompt = (
@@ -166,9 +175,13 @@ def chat(
         temperature=0
     ).choices[0].message.content.strip()
 
-    print(f"ℹ️ Rerank selected chunk indices: {best}")
+    if DEBUG: print(f"ℹ️ Rerank selected chunk indices: {best}")
 
-    keep = {int(x) for x in best.split(",") if x.strip().isdigit()}
+    try:
+        keep = {int(x) for x in best.split(",") if x.strip().isdigit()}
+    except Exception:
+        keep = set()
+
     resp.matches = (
         [m for i, m in enumerate(resp.matches) if i in keep][:rerank_keep]
         if keep else
@@ -177,18 +190,18 @@ def chat(
 
     if not resp.matches:
         return {"answer": "I couldn't find anything relevant in this manual.",
-                "chunks_used": [], "grounded": False}
+                "chunks_used": [], "grounded": False, "confidence": 0.0}
 
     # 3-4) build context
     context_parts: List[str] = []
     for i, m in enumerate(resp.matches, start=1):
         title = m.metadata.get("title") or ""
         tag   = f"[{i} – {title}]" if title else f"[{i}]"
-        snippet = m.metadata["text"][:500]
+        snippet = m.metadata["text"].split("\n")[0][:300]
         context_parts.append(f"{tag} {snippet}")
     context = "\n\n".join(context_parts)
 
-    print(f"ℹ️ Context used for grounding:\n{context}")
+    if DEBUG: print(f"ℹ️ Context used for grounding:\n{context}")
 
     # 3-5) final answer
     prompt = (
@@ -204,12 +217,16 @@ def chat(
         temperature=0
     ).choices[0].message.content.strip()
 
-    print(f"ℹ️ Final answer:\n{answer}")
+    if DEBUG: print(f"ℹ️ Final answer:\n{answer}")
+
+    top_score = resp.matches[0].score if resp.matches else 0.0
+    confidence = top_score if have_docs else 0.5
 
     return {
         "answer":      answer,
         "chunks_used": [m.id for m in resp.matches],
         "grounded":    True,
+        "confidence":  confidence,
     }
 
 # ────────────────────────────────────────────────────────────
