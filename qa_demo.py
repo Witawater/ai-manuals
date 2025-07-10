@@ -78,33 +78,38 @@ def chat(
       }
     """
 
-    # 3-2) similarity search
-    resp = idx.query(
-        vector=None,
-        top_k=top_k,
-        filter={"customer": {"$eq": customer}},
-        include_metadata=True
-    )
-
     import re
 
     def normalize_question(q: str, product_name: str) -> str:
         return re.sub(r"\b(the\s)?(machine|unit|device|appliance)\b", product_name, q, flags=re.IGNORECASE)
 
-    # Try to infer product name from metadata
-    product_name = "machine"  # default
-    if resp.matches:
-        product_name = resp.matches[0].metadata.get("product", "machine")
-
-    # Normalize question before embedding
-    question = normalize_question(question, product_name)
-
-    # 3-1) embed the question
-    q_vec = client.embeddings.create(
+    # Embed the original question first to get a vector for querying
+    q_vec_initial = client.embeddings.create(
         model=EMBED_MODEL, input=[question]
     ).data[0].embedding
 
-    # 3-2) similarity search
+    # Initial similarity search to infer product name
+    resp_initial = idx.query(
+        vector=q_vec_initial,
+        top_k=top_k,
+        filter={"customer": {"$eq": customer}},
+        include_metadata=True
+    )
+
+    # Extract product name from top matching chunk's metadata or default
+    product_name = "machine"  # default
+    if resp_initial.matches:
+        product_name = resp_initial.matches[0].metadata.get("product", "machine")
+
+    # Normalize the original question with the product name
+    normalized_question = normalize_question(question, product_name)
+
+    # Embed the normalized question
+    q_vec = client.embeddings.create(
+        model=EMBED_MODEL, input=[normalized_question]
+    ).data[0].embedding
+
+    # Query Pinecone once with the normalized question vector
     resp = idx.query(
         vector=q_vec,
         top_k=top_k,
@@ -136,7 +141,7 @@ def chat(
             model=CHAT_MODEL,
             messages=[
                 {"role": "system", "content": sys_prompt},
-                {"role": "user",   "content": question},
+                {"role": "user",   "content": normalized_question},
             ],
             temperature=0.3
         ).choices[0].message.content.strip()
@@ -148,7 +153,7 @@ def chat(
     # 3-3) GPT-4o re-rank → keep top N chunks
     rerank_prompt = (
         "Which chunks best answer the question?\n\n"
-        f"QUESTION:\n{question}\n\n"
+        f"QUESTION:\n{normalized_question}\n\n"
         "CHUNKS:\n" +
         "\n\n".join(f"[{i}] ({m.metadata.get('title', 'No Title')}) {m.metadata['text']}"
                     for i, m in enumerate(resp.matches)) +
