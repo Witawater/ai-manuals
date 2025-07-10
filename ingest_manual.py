@@ -28,8 +28,8 @@ from pinecone import Pinecone, ServerlessSpec, CloudProvider
 load_dotenv(".env")
 
 INDEX_NAME   = os.getenv("PINECONE_INDEX",  "manuals-small")
-EMBED_MODEL  = os.getenv("OPENAI_EMBED_MODEL", "text-embedding-3-small")
-DIMENSION    = 1536                     # ← text-embedding-3-small
+EMBED_MODEL  = os.getenv("embedding_model", "text-embedding-3-large")
+DIMENSION    = 3072                     # ← text-embedding-3-large
 CHUNK_TOKENS = 300                      # ≈ 230–250 words
 OVERLAP      = 50                       # keep last 50 tokens as bridge
 BATCH_EMBED  = 100                      # OpenAI batch size

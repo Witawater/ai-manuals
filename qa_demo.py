@@ -20,7 +20,7 @@ from pinecone import Pinecone, ServerlessSpec, CloudProvider
 # ────────────────────────────────────────────────────────────
 dotenv.load_dotenv(".env")
 
-EMBED_MODEL = os.getenv("OPENAI_EMBED_MODEL", "text-embedding-3-large")
+EMBED_MODEL = os.getenv("embedding_model", "text-embedding-3-large")
 CHAT_MODEL  = os.getenv("OPENAI_CHAT_MODEL",  "gpt-4o")
 INDEX_NAME  = os.getenv("PINECONE_INDEX",     "manuals-small")
 DIM         = 3072                            # text-embedding-3-large
