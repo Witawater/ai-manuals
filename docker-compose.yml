@@ -1,6 +1,12 @@
 services:
   rag-manuals:
-    build: .
-    env_file: .env      # same secrets file you use locally
+    container_name: ai-manuals-app
+    build:
+      context: .
+      dockerfile: Dockerfile
+    env_file: .env
     ports:
       - "8000:8000"
+    volumes:
+      - .:/app
+    restart: unless-stopped

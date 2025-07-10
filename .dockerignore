@@ -1,5 +1,34 @@
-venv
-__pycache__
-*.pyc
+# Ignore Python cache and compiled files
+__pycache__/
+*.py[cod]
+*.pyo
+
+# Ignore virtual environments
+venv/
+.venv/
+
+# Ignore logs and coverage files
+*.log
+.coverage
+coverage.xml
+
+# Ignore PDFs and manuals
 *.pdf
-.git
+
+# Ignore system files
+.DS_Store
+Thumbs.db
+
+# Ignore editor-specific files
+.vscode/
+*.swp
+
+# Ignore Git and related metadata
+.git/
+.gitignore
+
+# Ignore package info and wheels
+*.egg-info/
+dist/
+build/
+pip-wheel-metadata/

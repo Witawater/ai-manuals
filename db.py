@@ -30,17 +30,20 @@ with engine.begin() as conn:
             customer    TEXT,
             question    TEXT,
             answer      TEXT,
-            score       SMALLINT              -- +1 or -1
+            score       SMALLINT CHECK (score IN (-1, 1))  -- +1 or -1
         );
     """))
 
-    # 2) ensure chunks_used column exists
+    # 2) migrations for schema evolution
+    # ──────────────────────────────────
+
+    # Add column if it doesn't exist
     conn.execute(text("""
         ALTER TABLE feedback
         ADD COLUMN IF NOT EXISTS chunks_used  text[];
     """))
 
-    # 3) …and is typed as text[] even if an old deploy made it integer[]
+    # Ensure it has the correct type
     conn.execute(text("""
         ALTER TABLE feedback
         ALTER COLUMN chunks_used

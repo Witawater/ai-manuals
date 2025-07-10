@@ -1,8 +1,7 @@
-
-
 import fitz  # PyMuPDF
 import re
 import uuid
+import json
 from pathlib import Path
 
 def read_pdf(path):
@@ -25,10 +24,12 @@ def split_into_chunks(pages):
             # Detect section headings (very rough)
             if re.match(r"^\d+(\.\d+)*\s+[A-Z][\w\s\-]+$", line):
                 if buffer:
+                    content = "\n".join(buffer)
                     chunks.append({
                         "id": str(uuid.uuid4())[:8],
-                        "text": "\n".join(buffer),
-                        "section": current_section or "Untitled",
+                        "text": content,
+                        "tokens": len(content.split()),
+                        "section": (current_section or "Untitled").strip(),
                         "page": i
                     })
                     buffer = []
@@ -37,10 +38,12 @@ def split_into_chunks(pages):
                 buffer.append(line)
 
         if buffer:
+            content = "\n".join(buffer)
             chunks.append({
                 "id": str(uuid.uuid4())[:8],
-                "text": "\n".join(buffer),
-                "section": current_section or "Untitled",
+                "text": content,
+                "tokens": len(content.split()),
+                "section": (current_section or "Untitled").strip(),
                 "page": i
             })
 
@@ -48,7 +51,7 @@ def split_into_chunks(pages):
 
 def preview(chunks, n=3):
     for c in chunks[:n]:
-        print(f"[{c['section']}] (p{c['page']}) → {len(c['text'])} chars\n")
+        print(f"[{c['section']}] (p{c['page']}) → {len(c['text'])} chars, {c['tokens']} tokens\n")
 
 if __name__ == "__main__":
     PDF_PATH = "Test Manual.pdf"
@@ -57,6 +60,5 @@ if __name__ == "__main__":
     preview(chunks)
 
     # Optional: save to file
-    import json
     with open("test_chunks.json", "w") as f:
         json.dump(chunks, f, indent=2)

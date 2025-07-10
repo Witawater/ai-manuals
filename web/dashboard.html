@@ -4,6 +4,7 @@
   <meta charset="utf-8">
   <title>AI-Manuals – Feedback dashboard</title>
   <script src="https://cdn.jsdelivr.net/npm/chart.js@4"></script>
+  <meta name="api-key" content="d4d6aa9f2bf75faf76454d8621af7c01">
   <style>
     body{font-family:sans-serif;max-width:880px;margin:auto;padding:20px}
     h2{margin-bottom:6px}
@@ -50,7 +51,7 @@
 </section>
 
 <script>
-const API_KEY = "d4d6aa9f2bf75faf76454d8621af7c01";   <!-- hard-code or read from <meta data-apikey=""> -->
+const API_KEY = document.querySelector('meta[name="api-key"]')?.content || "";
 
 /* helper */
 function authHeaders(extra = {}) {

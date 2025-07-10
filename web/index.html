@@ -9,6 +9,7 @@
     .fb    {font-size:20px;margin:0 6px;cursor:pointer}
     .hide  {display:none}
   </style>
+  <meta name="api-key" content="d4d6aa9f2bf75faf76454d8621af7c01">
 </head>
 <body>
 <h2>Manual helper</h2>
@@ -35,8 +36,9 @@
 
 
 <script>
-// TODO: replace with <meta data-apikey=""> in production
-const API_KEY = "d4d6aa9f2bf75faf76454d8621af7c01";
+// This is a demo API key. For production, override via <meta name="api-key"> in the HTML <head>.
+// Load API key from meta tag if available (fallback to hardcoded for demo)
+const API_KEY = document.querySelector('meta[name="api-key"]')?.content || "d4d6aa9f2bf75faf76454d8621af7c01";
 
 /* helper */
 function authHeaders(extra = {}) {

@@ -31,7 +31,7 @@ from db            import engine              # creates/opens Postgres table
 app = FastAPI()
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["*"],      # tighten before prod
+    allow_origins=["https://ai-manuals.onrender.com"],  
     allow_methods=["*"],
     allow_headers=["*"],
 )
@@ -42,6 +42,7 @@ async def upload_pdf(
     file: UploadFile = File(...),
     customer: str    = Form("demo01")
 ):
+    print(f"📥 Upload received: {file.filename} from {customer}")
     tmp = f"/tmp/{file.filename}"
     with open(tmp, "wb") as f:
         f.write(await file.read())
@@ -60,7 +61,10 @@ async def ask(
     Returns:
       {"answer": "...", "chunks_used": ["cust-id-123", …]}
     """
-    return chat(question, customer)
+    result = chat(question, customer)
+    if result.get("grounded") is False:
+        print("⚠️  Fallback to GPT (not grounded)")
+    return result
 # ╰────────────────────────────────────────────────────────────╯
 
 
@@ -79,6 +83,7 @@ def add_feedback(data: FeedbackIn):
         raise HTTPException(400, "score must be +1 or -1")
 
     chunk_ids = data.chunks_used or data.chunks or []
+    print(f"📝 Feedback: {'👍' if data.score == 1 else '👎'} on {len(chunk_ids)} chunks")
 
     with engine.begin() as conn:
         conn.execute(

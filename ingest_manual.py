@@ -144,7 +144,7 @@ def ensure_index(dim: int) -> None:
     print("✅  Index ready.")
 
 # ────────────────────────── 4.  MAIN INGEST ─────────────────────
-def ingest(path: str, customer: str = "demo01") -> None:
+def ingest(path: str, customer: str = "demo01", dry_run: bool = False) -> None:
     print("📖  Chunking PDF …")
     chunks, metas = pdf_to_chunks(path)
 
@@ -152,6 +152,11 @@ def ingest(path: str, customer: str = "demo01") -> None:
     vectors: List[List[float]] = []
     for i in range(0, len(chunks), BATCH_EMBED):
         vectors.extend(embed_texts(chunks[i : i + BATCH_EMBED]))
+    
+    if dry_run:
+        for i, chunk in enumerate(chunks):
+            print(f"\n[{i}] {metas[i]['title']} (page {metas[i]['page']}) – {token_len(chunk)} tokens:\n{chunk}")
+        return
 
     ensure_index(DIMENSION)
     index = pc.Index(INDEX_NAME)
@@ -165,8 +170,10 @@ def ingest(path: str, customer: str = "demo01") -> None:
                 "customer": customer,
                 "chunk":    i,
                 "title":    metas[i]["title"],
-                "text":     chunks[i].split("\n")[0][:200],   # preview for debugging: first line
+                "text":     chunks[i],   # full chunk text for QA use
                 "product":  metas[i]["product"],
+                "tokens":   token_len(chunks[i]),
+                "filename": os.path.basename(path),
             },
         )
         for i, vec in enumerate(vectors)
@@ -189,10 +196,11 @@ if __name__ == "__main__":
     )
     parser.add_argument("pdf", help="Path to the PDF manual")
     parser.add_argument("--customer", default="demo01", help="Tenant namespace")
+    parser.add_argument("--dry", action="store_true", help="Preview chunks without uploading")
     args = parser.parse_args()
 
     pdf_path = pathlib.Path(args.pdf)
     if not pdf_path.exists():
         sys.exit(f"🟥  PDF not found: {pdf_path}")
 
-    ingest(str(pdf_path), args.customer)
+    ingest(str(pdf_path), args.customer, dry_run=args.dry)
