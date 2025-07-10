@@ -73,21 +73,18 @@ async function ask () {
   });
   const js = await r.json();
 
-  /* remember context for feedback */
   lastQuestion = q.value;
   lastAnswer   = js.answer;
-  lastChunks   = js.chunks ?? js.chunks_used ?? [];   // tolerate both keys
+  lastChunks   = js.chunks_used ?? js.chunks ?? [];
 
-  /* ---------- render answer ---------- */
   if (js.grounded === false) {
-    // came from GPT fallback (not found in manual)
     answer.innerHTML =
       `<i>${js.answer}</i><br><small>⚠︎ Not from manual</small>`;
   } else {
-    // normal grounded answer
     answer.textContent = js.answer;
   }
-  fb.classList.remove("hide");      // show 👍/👎 buttons
+
+  fb.classList.remove("hide");
 }
 
 /* ========== send thumbs ========== */

@@ -66,7 +66,7 @@ idx = pc.Index(INDEX_NAME)   # host auto-resolved
 def chat(
     question : str,
     customer : str = "demo01",
-    top_k    : int = 30,
+    top_k    : int = 50,
     concise  : bool = False,
     fallback : bool = True,      # allow GPT fallback
     rerank_keep : int = 4        # how many chunks after re-rank

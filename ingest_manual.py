@@ -46,13 +46,8 @@ def token_len(text: str | List[str]) -> int:
     return len(enc.encode(text))
 
 def pdf_to_chunks(path: str) -> Tuple[List[str], List[dict]]:
-    """
-    Split a PDF into ≈ CHUNK_TOKENS-token chunks grouped by section headers.
+    import re
 
-    Returns
-        chunks : list[str]   – the raw text chunks
-        metas  : list[dict]  – one dict per chunk, currently with .title
-    """
     filename = os.path.basename(path).lower()
     if "coffee" in filename:
         product = "coffee maker"
@@ -66,32 +61,30 @@ def pdf_to_chunks(path: str) -> Tuple[List[str], List[dict]]:
     chunks: List[str] = []
     metas : List[dict] = []
 
-    sections: List[Tuple[str, List[str]]] = []
+    sections: List[Tuple[str, List[str], int]] = []
     current_head = None
     current_lines: List[str] = []
+    current_page: int = 0
+
+    heading_re = re.compile(r"^\d+(\.\d+)*\s+[A-Z]")
 
     with pdfplumber.open(path) as pdf:
         for page_num, page in enumerate(pdf.pages, start=1):
             for line in (page.extract_text() or "").splitlines():
-                if line.isupper() or line.startswith(("Using", "Cleaning", "To ")):
-                    # Save previous section if exists
+                if heading_re.match(line.strip()):
                     if current_head is not None:
-                        sections.append((current_head, current_lines))
+                        sections.append((current_head, current_lines, current_page))
                     current_head = line.strip()
                     current_lines = []
+                    current_page = page_num
                 current_lines.append(line)
-        # Add last section
         if current_head is not None:
-            sections.append((current_head, current_lines))
+            sections.append((current_head, current_lines, current_page))
         elif current_lines:
-            # No header found, treat all as one section with empty header
-            sections.append(("", current_lines))
+            sections.append(("", current_lines, page_num))
 
-    # Now chunk each section into token-sized pieces with overlap
-    for title, lines in sections:
+    for title, lines, page_num in sections:
         buffer: List[str] = []
-        # page_num for metas, but we only know section's page if we track it; fallback to None
-        page_num = None
         for line in lines:
             buffer.append(line)
             if token_len(buffer) >= CHUNK_TOKENS:
@@ -100,12 +93,10 @@ def pdf_to_chunks(path: str) -> Tuple[List[str], List[dict]]:
                     continue
                 chunks.append(chunk_text)
                 metas.append({"title": title, "product": product, "page": page_num})
-                # keep overlap tokens as bridge for next chunk
                 encoded = enc.encode(chunk_text)
                 overlap_tokens = encoded[-OVERLAP:] if len(encoded) > OVERLAP else encoded
                 overlap_text = enc.decode(overlap_tokens)
                 buffer = [overlap_text]
-        # flush remainder
         if buffer:
             chunk_text = "\n".join(buffer)
             if token_len(chunk_text) >= 10:
