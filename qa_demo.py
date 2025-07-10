@@ -122,7 +122,7 @@ def chat(
         snippet = m.metadata.get("text", "")[:75].replace("\n", " ")
         print(f"  [{i}] score={m.score:.4f} preview='{snippet}...'")
 
-    have_docs = bool(resp.matches) and resp.matches[0].score > 0.55
+    have_docs = bool(resp.matches) and resp.matches[0].score > 0.50
     if not have_docs and not fallback:
         return {"answer": "I couldn't find anything relevant in this manual.",
                 "chunks_used": [],
@@ -157,8 +157,8 @@ def chat(
         "CHUNKS:\n" +
         "\n\n".join(f"[{i}] ({m.metadata.get('title', 'No Title')}) {m.metadata['text']}"
                     for i, m in enumerate(resp.matches)) +
-        f"\n\nReturn ONLY the numbers of the {rerank_keep} most relevant "
-        "chunks, comma-separated (e.g. 0,2,3,7)."
+        "\n\nNote: If the question refers to tubing, prioritize chunks with keywords like tubing, hose, ID, fittings, M16x1, or temperature rating. Give preference to chunks whose section title is clearly related.\n\n"
+        f"Return ONLY the numbers of the {rerank_keep} most relevant chunks, comma-separated (e.g. 0,2,3,7)."
     )
     best = client.chat.completions.create(
         model=CHAT_MODEL,
@@ -192,8 +192,7 @@ def chat(
 
     # 3-5) final answer
     prompt = (
-        "You are a helpful support agent. Prioritize using the context below to answer the question. "
-        "If the context is vague or partial, you may still try to construct a helpful answer. Do not guess wildly.\n\n"
+        "You are reading a product manual to find an exact answer to a technical question. Focus on the sections below as if you're scanning a PDF. If the context contains technical specifications relevant to the question, summarize them clearly and precisely, regardless of product type.\n\n"
         f"{context}\n\n" +
         ("Answer in 2-4 sentences and cite tags like [1] or [2]."
          if concise else
