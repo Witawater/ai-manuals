@@ -161,13 +161,14 @@ def chat(
 
     # 3-3) GPT-4o re-rank → keep top N chunks
     rerank_prompt = (
-        "Select the most relevant chunks that directly answer the question. Think step-by-step.\n\n"
+        "You are selecting the most relevant manual chunks to answer the user’s question.\n"
+        "Think step-by-step. Prioritize direct matches and detailed steps.\n\n"
         f"QUESTION:\n{normalized_question}\n\n"
         "CHUNKS:\n" +
         "\n\n".join(f"[{i}] ({m.metadata.get('title', 'No Title')}) {m.metadata['text']}"
                     for i, m in enumerate(resp.matches)) +
-        "\n\nNote: If the question refers to tubing, prioritize chunks with keywords like tubing, hose, ID, fittings, M16x1, or temperature rating. Give preference to chunks whose section title is clearly related.\n\n"
-        f"Return ONLY the numbers of the {rerank_keep} most relevant chunks, comma-separated (e.g. 0,2,3,7). If none are clearly relevant, return an empty list."
+        "\n\nReturn ONLY the numbers of the {rerank_keep} most relevant chunks, comma-separated (e.g. 0,2,3,7). "
+        "If none are clearly relevant, return an empty list."
     )
     best = client.chat.completions.create(
         model=CHAT_MODEL,
