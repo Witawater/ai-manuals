@@ -96,7 +96,7 @@ def chat(
         snippet = m.metadata.get("text", "")[:75].replace("\n", " ")
         print(f"  [{i}] score={m.score:.4f} preview='{snippet}...'")
 
-    have_docs = bool(resp.matches) and resp.matches[0].score > 0.65
+    have_docs = bool(resp.matches) and resp.matches[0].score > 0.55
     if not have_docs and not fallback:
         return {"answer": "I couldn't find anything relevant in this manual.",
                 "chunks_used": [],
@@ -107,8 +107,9 @@ def chat(
         sys_prompt = (
             "You are a knowledgeable support agent. "
             "The official manual does not cover the user's question. "
-            "Answer from general domain knowledge only if you are confident, "
-            "and preface with '(General guidance – not in manual)'."
+            "If you are confident based on your own general domain knowledge, answer clearly. "
+            "If the context is limited or unclear, you may still answer based on best available information, "
+            "but always preface with '(General guidance – not in manual)'."
         )
         answer = client.chat.completions.create(
             model=CHAT_MODEL,
@@ -165,7 +166,8 @@ def chat(
 
     # 3-5) final answer
     prompt = (
-        "You are a helpful support agent. ONLY use the context below.\n\n"
+        "You are a helpful support agent. Prioritize using the context below to answer the question. "
+        "If the context is vague or partial, you may still try to construct a helpful answer. Do not guess wildly.\n\n"
         f"{context}\n\n" +
         ("Answer in 2-4 sentences and cite tags like [1] or [2]."
          if concise else
