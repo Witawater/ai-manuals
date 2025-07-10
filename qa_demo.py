@@ -129,7 +129,7 @@ def chat(
         "Which chunks best answer the question?\n\n"
         f"QUESTION:\n{question}\n\n"
         "CHUNKS:\n" +
-        "\n\n".join(f"[{i}] {m.metadata['text']}"
+        "\n\n".join(f"[{i}] ({m.metadata.get('title', 'No Title')}) {m.metadata['text']}"
                     for i, m in enumerate(resp.matches)) +
         f"\n\nReturn ONLY the numbers of the {rerank_keep} most relevant "
         "chunks, comma-separated (e.g. 0,2,3,7)."
@@ -171,8 +171,7 @@ def chat(
         f"{context}\n\n" +
         ("Answer in 2-4 sentences and cite tags like [1] or [2]."
          if concise else
-         "Write a complete answer, including any useful details from the "
-         "context. Cite the tags you used, e.g. [1] or [2].")
+         "Write a complete answer, using only the context provided. Cite tags like [1] or [2] only if they directly support the answer. Do not cite irrelevant chunks.")
     )
     answer = client.chat.completions.create(
         model=CHAT_MODEL,

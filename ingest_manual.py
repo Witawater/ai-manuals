@@ -47,7 +47,7 @@ def token_len(text: str | List[str]) -> int:
 
 def pdf_to_chunks(path: str) -> Tuple[List[str], List[dict]]:
     """
-    Split a PDF into ≈ CHUNK_TOKENS-token chunks.
+    Split a PDF into ≈ CHUNK_TOKENS-token chunks grouped by section headers.
 
     Returns
         chunks : list[str]   – the raw text chunks
@@ -55,29 +55,46 @@ def pdf_to_chunks(path: str) -> Tuple[List[str], List[dict]]:
     """
     chunks: List[str] = []
     metas : List[dict] = []
-    buffer: List[str] = []
-    current_head = ""
+
+    sections: List[Tuple[str, List[str]]] = []
+    current_head = None
+    current_lines: List[str] = []
 
     with pdfplumber.open(path) as pdf:
         for page in pdf.pages:
             for line in (page.extract_text() or "").splitlines():
                 if line.isupper() or line.startswith(("Using", "Cleaning", "To ")):
+                    # Save previous section if exists
+                    if current_head is not None:
+                        sections.append((current_head, current_lines))
                     current_head = line.strip()
-                buffer.append(line)
+                    current_lines = []
+                current_lines.append(line)
+        # Add last section
+        if current_head is not None:
+            sections.append((current_head, current_lines))
+        elif current_lines:
+            # No header found, treat all as one section with empty header
+            sections.append(("", current_lines))
 
-                if token_len(buffer) >= CHUNK_TOKENS:
-                    chunks.append("\n".join(buffer))
-                    metas.append({"title": current_head})
-                    # keep overlap
-                    overlap = enc.decode(
-                        enc.encode("\n".join(buffer))[-OVERLAP:]
-                    )
-                    buffer = [overlap]
-
-    # flush remainder
-    if buffer:
-        chunks.append("\n".join(buffer))
-        metas.append({"title": current_head})
+    # Now chunk each section into token-sized pieces with overlap
+    for title, lines in sections:
+        buffer: List[str] = []
+        for line in lines:
+            buffer.append(line)
+            if token_len(buffer) >= CHUNK_TOKENS:
+                chunk_text = "\n".join(buffer)
+                chunks.append(chunk_text)
+                metas.append({"title": title})
+                # keep overlap tokens as bridge for next chunk
+                encoded = enc.encode(chunk_text)
+                overlap_tokens = encoded[-OVERLAP:] if len(encoded) > OVERLAP else encoded
+                overlap_text = enc.decode(overlap_tokens)
+                buffer = [overlap_text]
+        # flush remainder
+        if buffer:
+            chunks.append("\n".join(buffer))
+            metas.append({"title": title})
 
     return chunks, metas
 
