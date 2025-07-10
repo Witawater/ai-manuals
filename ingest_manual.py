@@ -53,6 +53,16 @@ def pdf_to_chunks(path: str) -> Tuple[List[str], List[dict]]:
         chunks : list[str]   – the raw text chunks
         metas  : list[dict]  – one dict per chunk, currently with .title
     """
+    filename = os.path.basename(path).lower()
+    if "coffee" in filename:
+        product = "coffee maker"
+    elif "printer" in filename:
+        product = "printer"
+    elif "vacuum" in filename:
+        product = "vacuum"
+    else:
+        product = "machine"
+
     chunks: List[str] = []
     metas : List[dict] = []
 
@@ -85,7 +95,7 @@ def pdf_to_chunks(path: str) -> Tuple[List[str], List[dict]]:
             if token_len(buffer) >= CHUNK_TOKENS:
                 chunk_text = "\n".join(buffer)
                 chunks.append(chunk_text)
-                metas.append({"title": title})
+                metas.append({"title": title, "product": product})
                 # keep overlap tokens as bridge for next chunk
                 encoded = enc.encode(chunk_text)
                 overlap_tokens = encoded[-OVERLAP:] if len(encoded) > OVERLAP else encoded
@@ -94,7 +104,7 @@ def pdf_to_chunks(path: str) -> Tuple[List[str], List[dict]]:
         # flush remainder
         if buffer:
             chunks.append("\n".join(buffer))
-            metas.append({"title": title})
+            metas.append({"title": title, "product": product})
 
     return chunks, metas
 
@@ -159,6 +169,7 @@ def ingest(path: str, customer: str = "demo01") -> None:
                 "chunk":    i,
                 "title":    metas[i]["title"],
                 "text":     chunks[i][:200],   # preview for debugging
+                "product":  metas[i]["product"],
             },
         )
         for i, vec in enumerate(vectors)
