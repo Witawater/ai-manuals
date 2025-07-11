@@ -30,8 +30,8 @@ load_dotenv(".env")
 INDEX_NAME   = os.getenv("PINECONE_INDEX",  "manuals-small")
 EMBED_MODEL  = os.getenv("embedding_model", "text-embedding-3-large")
 DIMENSION    = 3072                     # ← text-embedding-3-large
-CHUNK_TOKENS = 600                      # ≈ 400 words
-OVERLAP      = 150                       # keep last 50 tokens as bridge
+CHUNK_TOKENS = 1000                      # ≈ 1000 words
+OVERLAP      = 200                       # keep last 50 tokens as bridge
 BATCH_EMBED  = 100                      # OpenAI batch size
 BATCH_UPSERT = 100                      # Pinecone batch size
 
