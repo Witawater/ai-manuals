@@ -84,24 +84,20 @@ def pdf_to_chunks(path: str) -> Tuple[List[str], List[dict]]:
             sections.append(("", current_lines, page_num))
 
     for title, lines, page_num in sections:
-        buffer: List[str] = []
-        for line in lines:
-            buffer.append(line)
-            if token_len(buffer) >= CHUNK_TOKENS:
-                chunk_text = "\n".join(buffer)
-                if token_len(chunk_text) < 10:
-                    continue
-                chunks.append(chunk_text)
-                metas.append({"title": title, "product": product, "page": page_num})
-                encoded = enc.encode(chunk_text)
-                overlap_tokens = encoded[-OVERLAP:] if len(encoded) > OVERLAP else encoded
-                overlap_text = enc.decode(overlap_tokens)
-                buffer = [overlap_text]
-        if buffer:
-            chunk_text = "\n".join(buffer)
-            if token_len(chunk_text) >= 10:
-                chunks.append(chunk_text)
-                metas.append({"title": title, "product": product, "page": page_num})
+        paragraphs = [p.strip() for p in "\n".join(lines).split("\n\n") if p.strip()]
+        current_chunk = ""
+        for para in paragraphs:
+            test_chunk = f"{current_chunk}\n\n{para}" if current_chunk else para
+            if token_len(test_chunk) <= CHUNK_TOKENS:
+                current_chunk = test_chunk
+            else:
+                if current_chunk:
+                    chunks.append(current_chunk.strip())
+                    metas.append({"title": title, "product": product, "page": page_num})
+                current_chunk = para
+        if current_chunk:
+            chunks.append(current_chunk.strip())
+            metas.append({"title": title, "product": product, "page": page_num})
 
     return chunks, metas
 
