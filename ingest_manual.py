@@ -172,10 +172,10 @@ def ensure_index(dim: int):
 # ────────────────────────── 6. INGEST ──────────────────────────
 def ingest(
     pdf_path: str,
-    customer: str,
-    chunk_tokens: int,
-    overlap: int,
-    dry_run: bool,
+    customer: str = "demo01",
+    chunk_tokens: int = 800,   # default matches CLI flag
+    overlap: int = 150,
+    dry_run: bool = False,
     batch_embed: int = 100,
     batch_upsert: int = 100,
 ):
