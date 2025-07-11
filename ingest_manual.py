@@ -15,7 +15,7 @@ Usage
 
 from __future__ import annotations
 
-import os, sys, time, uuid, pathlib, argparse, itertools, math
+import os, sys, time, uuid, pathlib, argparse
 from typing import List, Tuple
 
 import pdfplumber
@@ -44,7 +44,7 @@ def retry(fn, *a, **kw):
     for attempt in range(5):
         try:
             return fn(*a, **kw)
-        except RateLimitError as e:
+        except RateLimitError:
             wait = 2 ** attempt
             print(f"⚠️  Rate-limited; retrying in {wait}s …")
             time.sleep(wait)
@@ -56,9 +56,7 @@ def pdf_to_chunks(
     chunk_tokens: int,
     overlap: int,
 ) -> Tuple[List[str], List[dict]]:
-    """
-    Convert a PDF into overlapping chunks with metadata.
-    """
+    """Convert a PDF into overlapping chunks with metadata."""
     # crude product guess from filename
     fname = os.path.basename(path).lower()
     product = (
@@ -74,7 +72,7 @@ def pdf_to_chunks(
     with pdfplumber.open(path) as pdf:
         all_pages = [p.extract_text() or "" for p in pdf.pages]
 
-    # • Split on paragraphs first, then token-slide
+    # Split on paragraphs first
     paragraphs: List[Tuple[str, int]] = []          # (text, page)
     for pg_no, page in enumerate(all_pages, start=1):
         for para in (page.split("\n\n") or [""]):
@@ -82,60 +80,63 @@ def pdf_to_chunks(
             if para:
                 paragraphs.append((para, pg_no))
 
-    # sliding window over paragraphs
+    # ── helpers (must precede first call) ──────────────────────
+    def _flush(buffer: List[Tuple[str, int]]):
+        """Push current buffer into chunks & metadata lists."""
+        text       = "\n\n".join(p for p, _ in buffer).strip()
+        first_page = buffer[0][1]
+        chunks.append(text)
+        metas.append({
+            "title":   "",          # can’t reliably detect here
+            "product": product,
+            "page":    first_page,
+        })
+
+    def _overlap_tail(buffer: List[Tuple[str, int]], overlap_tokens: int):
+        """Return buffer holding the last N tokens of previous buffer."""
+        if overlap_tokens == 0:
+            return [], 0
+        rev   = list(reversed(buffer))
+        keep  = []
+        tokens = 0
+        for para, pg in rev:
+            t = token_len(para)
+            if tokens + t > overlap_tokens and keep:
+                break
+            keep.insert(0, (para, pg))
+            tokens += t
+        return keep, tokens
+    # ───────────────────────────────────────────────────────────
+
+    # Sliding window over paragraphs
     buf: List[Tuple[str, int]] = []
     buf_tokens = 0
     i = 0
     while i < len(paragraphs):
         para, pg_no = paragraphs[i]
-        para_tokens = token_len(para)
+        t_para = token_len(para)
 
-        if buf_tokens + para_tokens <= chunk_tokens or not buf:
+        if buf_tokens + t_para <= chunk_tokens or not buf:
             buf.append((para, pg_no))
-            buf_tokens += para_tokens
+            buf_tokens += t_para
             i += 1
         else:
-            _flush(buf, buf_tokens)
+            _flush(buf)
             # start new buffer with overlap
             buf, buf_tokens = _overlap_tail(buf, overlap)
-    # final flush
+
     if buf:
-        _flush(buf, buf_tokens)
-
-    def _flush(buffer, tok_len):
-        text = "\n\n".join(p for p, _ in buffer).strip()
-        first_page = buffer[0][1]
-        chunks.append(text)
-        metas.append({
-            "title":    "",          # can’t reliably detect here
-            "product":  product,
-            "page":     first_page,
-        })
-
-    def _overlap_tail(buffer, overlap_tokens):
-        """Return a new buffer containing last N tokens of old buffer."""
-        if overlap_tokens == 0:
-            return [], 0
-        rev = list(reversed(buffer))
-        keep: List[Tuple[str, int]] = []
-        tokens = 0
-        for para, pg in rev:
-            para_tokens = token_len(para)
-            if tokens + para_tokens > overlap_tokens and keep:
-                break
-            keep.insert(0, (para, pg))
-            tokens += para_tokens
-        return keep, tokens
+        _flush(buf)
 
     return chunks, metas
 
 # ────────────────────────── 4. EMBEDDING ───────────────────────
-def embed_texts(b: List[str]) -> List[List[float]]:
+def embed_texts(batch: List[str]) -> List[List[float]]:
     """Embed a batch of texts with retries."""
     rsp = retry(
         openai_client.embeddings.create,
         model=EMBED_MODEL,
-        input=b,
+        input=batch,
     )
     return [d.embedding for d in rsp.data]
 

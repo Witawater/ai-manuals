@@ -10,11 +10,12 @@ FastAPI service for AI-Manuals
 • static /                – tiny HTML/JS front-end
 """
 
+import os, uuid, json, tempfile
 from typing import List, Dict, Optional
 
 from fastapi import (
     FastAPI, File, UploadFile, Form,
-    HTTPException, Depends
+    BackgroundTasks, HTTPException, Depends
 )
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.staticfiles import StaticFiles
@@ -27,27 +28,50 @@ from qa_demo       import chat                # returns {"answer", "chunks_used"
 from auth          import require_api_key     # header guard: X-API-Key
 from db            import engine              # creates/opens Postgres table
 
-# ─── FastAPI  &  CORS ─────────────────────────────────────────
+# ─── tunables (env-vars) ──────────────────────────────────────
+CHUNK_TOKENS = int(os.getenv("CHUNK_TOKENS", "800"))
+OVERLAP      = int(os.getenv("OVERLAP",      "150"))
+
+# ─── FastAPI & CORS ───────────────────────────────────────────
 app = FastAPI()
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["https://ai-manuals.onrender.com"],  
+    allow_origins=["https://ai-manuals.onrender.com"],
     allow_methods=["*"],
     allow_headers=["*"],
 )
 
 # ╭────────────────────────── 1)  PDF upload ─────────────────╮
+def _ingest_and_cleanup(path: str, customer: str):
+    """Runs in background: ingest PDF then delete temp file."""
+    try:
+        ingest(path, customer, CHUNK_TOKENS, OVERLAP)
+    finally:
+        try:
+            os.remove(path)
+        except FileNotFoundError:
+            pass
+
 @app.post("/upload", dependencies=[Depends(require_api_key)])
 async def upload_pdf(
+    background_tasks: BackgroundTasks,
     file: UploadFile = File(...),
-    customer: str    = Form("demo01")
+    customer: str    = Form("demo01"),
 ):
     print(f"📥 Upload received: {file.filename} from {customer}")
-    tmp = f"/tmp/{file.filename}"
-    with open(tmp, "wb") as f:
+
+    # save to a truly unique tmp path
+    tmp_dir  = tempfile.gettempdir()
+    tmp_name = f"{uuid.uuid4().hex}_{file.filename}"
+    tmp_path = os.path.join(tmp_dir, tmp_name)
+
+    with open(tmp_path, "wb") as f:
         f.write(await file.read())
-    ingest(tmp, customer)
-    return {"status": "ingested", "file": file.filename}
+
+    # enqueue the long-running ingest
+    background_tasks.add_task(_ingest_and_cleanup, tmp_path, customer)
+
+    return {"status": "queued", "file": file.filename}
 # ╰────────────────────────────────────────────────────────────╯
 
 
@@ -91,14 +115,14 @@ def add_feedback(data: FeedbackIn):
               INSERT INTO feedback
                 (customer, question, answer, score, chunks_used)
               VALUES
-                (:customer, :question, :answer, :score, :chunks)
+                (:customer, :question, :answer, :score, :chunks::jsonb)
             """),
             {
                 "customer": data.customer,
                 "question": data.question,
                 "answer":   data.answer,
                 "score":    data.score,
-                "chunks":   chunk_ids,
+                "chunks":   json.dumps(chunk_ids),  # store as JSONB
             },
         )
     return {"ok": True}
@@ -108,7 +132,7 @@ def add_feedback(data: FeedbackIn):
 # ╭────────────────────── 4)  Daily thumbs summary ────────────╮
 @app.get("/feedback/summary")
 def feedback_summary(days: int = 7) -> List[Dict]:
-    days = int(days)                           # extra-safe cast
+    days = int(days)
     sql  = f"""
       SELECT
         date_trunc('day', ts)::date AS day,
