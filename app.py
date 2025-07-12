@@ -45,8 +45,11 @@ app.add_middleware(
 def _ingest_and_cleanup(path: str, customer: str):
     """Runs in background: ingest PDF then delete temp file."""
     try:
-        ingest(path, customer, CHUNK_TOKENS, OVERLAP)
-    finally:
+    ingest(path, customer, CHUNK_TOKENS, OVERLAP)
+    print(f"✅ Ingest complete: {path}")
+except Exception as e:
+    print(f"🛑 Ingest failed: {e}")
+finally:
         try:
             os.remove(path)
         except FileNotFoundError:

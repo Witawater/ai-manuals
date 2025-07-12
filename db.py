@@ -13,9 +13,9 @@ import os
 from sqlalchemy import create_engine, text
 
 # ── connection string ──────────────────────────────────────────────────
-DB_URL = os.getenv("DATABASE_URL")          # .env locally / Render in prod
-if not DB_URL:
-    raise RuntimeError("DATABASE_URL env var is missing")
+DATABASE_URL = os.getenv("DATABASE_URL")
+if not DATABASE_URL:
+    raise RuntimeError("🟥 DATABASE_URL missing")
 
 # Small pool is fine for our scale
 engine = create_engine(DB_URL, pool_size=5, max_overflow=0)
