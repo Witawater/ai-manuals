@@ -24,9 +24,9 @@ from sqlalchemy import text
 
 # ─── local modules ────────────────────────────────────────────
 from ingest_manual import ingest
-from qa_demo       import chat                # returns {"answer", "chunks_used"}
-from auth          import require_api_key     # header guard: X-API-Key
-from db            import engine              # creates/opens Postgres table
+from qa_demo       import chat
+from auth          import require_api_key
+from db            import engine
 
 # ─── tunables (env-vars) ──────────────────────────────────────
 CHUNK_TOKENS = int(os.getenv("CHUNK_TOKENS", "800"))
@@ -45,11 +45,11 @@ app.add_middleware(
 def _ingest_and_cleanup(path: str, customer: str):
     """Runs in background: ingest PDF then delete temp file."""
     try:
-    ingest(path, customer, CHUNK_TOKENS, OVERLAP)
-    print(f"✅ Ingest complete: {path}")
-except Exception as e:
-    print(f"🛑 Ingest failed: {e}")
-finally:
+        ingest(path, customer, CHUNK_TOKENS, OVERLAP)
+        print(f"✅ Ingest complete: {path}")
+    except Exception as e:
+        print(f"🛑 Ingest failed: {e}")
+    finally:
         try:
             os.remove(path)
         except FileNotFoundError:
@@ -63,7 +63,6 @@ async def upload_pdf(
 ):
     print(f"📥 Upload received: {file.filename} from {customer}")
 
-    # save to a truly unique tmp path
     tmp_dir  = tempfile.gettempdir()
     tmp_name = f"{uuid.uuid4().hex}_{file.filename}"
     tmp_path = os.path.join(tmp_dir, tmp_name)
@@ -71,7 +70,6 @@ async def upload_pdf(
     with open(tmp_path, "wb") as f:
         f.write(await file.read())
 
-    # enqueue the long-running ingest
     background_tasks.add_task(_ingest_and_cleanup, tmp_path, customer)
 
     return {"status": "queued", "file": file.filename}
@@ -84,10 +82,6 @@ async def ask(
     question: str = Form(...),
     customer: str = Form("demo01")
 ):
-    """
-    Returns:
-      {"answer": "...", "chunks_used": ["cust-id-123", …]}
-    """
     result = chat(question, customer)
     if result.get("grounded") is False:
         print("⚠️  Fallback to GPT (not grounded)")
@@ -100,9 +94,9 @@ class FeedbackIn(BaseModel):
     customer    : str
     question    : str
     answer      : str
-    score       : int                      # +1 👍  or  -1 👎
-    chunks_used : Optional[List[str]] = None   # preferred (new UI)
-    chunks      : Optional[List[str]] = None   # legacy alias
+    score       : int
+    chunks_used : Optional[List[str]] = None
+    chunks      : Optional[List[str]] = None
 
 @app.post("/feedback", dependencies=[Depends(require_api_key)])
 def add_feedback(data: FeedbackIn):
@@ -125,7 +119,7 @@ def add_feedback(data: FeedbackIn):
                 "question": data.question,
                 "answer":   data.answer,
                 "score":    data.score,
-                "chunks":   json.dumps(chunk_ids),  # store as JSONB
+                "chunks":   json.dumps(chunk_ids),
             },
         )
     return {"ok": True}
@@ -135,8 +129,7 @@ def add_feedback(data: FeedbackIn):
 # ╭────────────────────── 4)  Daily thumbs summary ────────────╮
 @app.get("/feedback/summary")
 def feedback_summary(days: int = 7) -> List[Dict]:
-    days = int(days)
-    sql  = f"""
+    sql = f"""
       SELECT
         date_trunc('day', ts)::date AS day,
         SUM((score =  1)::int)      AS up,
@@ -162,8 +155,7 @@ def worst_chunks(
     min_votes: int = 1,
     limit: int     = 50
 ) -> List[Dict]:
-    days = int(days)
-    sql  = f"""
+    sql = f"""
       SELECT
         unnest(chunks_used)                        AS chunk_id,
         COUNT(*)                                   AS total,
@@ -181,9 +173,10 @@ def worst_chunks(
       LIMIT :limit;
     """
     with engine.begin() as conn:
-        rows = conn.execute(
-            text(sql), {"min_votes": min_votes, "limit": limit}
-        )
+        rows = conn.execute(text(sql), {
+            "min_votes": min_votes,
+            "limit": limit
+        })
         return [
             {
                 "chunk_id": r.chunk_id,
