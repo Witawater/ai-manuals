@@ -49,11 +49,7 @@ def retry(fn, *a, **kw):
     raise RuntimeError("Too many rate-limit failures.")
 
 # ───────────────────── 3. CHUNKING LOGIC ───────────────────────
-def pdf_to_chunks(
-    path: str,
-    chunk_tokens: int,
-    overlap: int,
-) -> Tuple[List[str], List[dict]]:
+def pdf_to_chunks(path: str, chunk_tokens: int, overlap: int) -> Tuple[List[str], List[dict]]:
     fname = os.path.basename(path).lower()
     product = (
         "coffee maker" if "coffee" in fname else
@@ -75,8 +71,7 @@ def pdf_to_chunks(
             if para:
                 paragraphs.append((para, pg_no))
 
-    # ── Define helpers BEFORE use ─────────────────────────────
-    def _flush(buffer: List[Tuple[str, int]], tok_len: int):
+    def _flush(buffer, tok_len):
         text = "\n\n".join(p for p, _ in buffer).strip()
         first_page = buffer[0][1]
         chunks.append(text)
@@ -86,11 +81,11 @@ def pdf_to_chunks(
             "page":     first_page,
         })
 
-    def _overlap_tail(buffer: List[Tuple[str, int]], overlap_tokens: int):
+    def _overlap_tail(buffer, overlap_tokens):
         if overlap_tokens == 0:
             return [], 0
         rev = list(reversed(buffer))
-        keep: List[Tuple[str, int]] = []
+        keep = []
         tokens = 0
         for para, pg in rev:
             t = token_len(para)
@@ -99,18 +94,17 @@ def pdf_to_chunks(
             keep.insert(0, (para, pg))
             tokens += t
         return keep, tokens
-    # ─────────────────────────────────────────────────────────
 
     buf: List[Tuple[str, int]] = []
     buf_tokens = 0
     i = 0
     while i < len(paragraphs):
         para, pg_no = paragraphs[i]
-        para_tokens = token_len(para)
+        t_para = token_len(para)
 
-        if buf_tokens + para_tokens <= chunk_tokens or not buf:
+        if buf_tokens + t_para <= chunk_tokens or not buf:
             buf.append((para, pg_no))
-            buf_tokens += para_tokens
+            buf_tokens += t_para
             i += 1
         else:
             _flush(buf, buf_tokens)
@@ -136,15 +130,14 @@ if not ENV:
     sys.exit("🟥  PINECONE_ENV missing in .env")
 
 cloud = CloudProvider.AWS if ENV.startswith("aws") else CloudProvider.GCP
+
 pc = Pinecone(api_key=os.getenv("PINECONE_API_KEY"), environment=ENV)
 
 def ensure_index(dim: int):
     if INDEX_NAME in pc.list_indexes().names():
         info = pc.describe_index(INDEX_NAME)
         if info.dimension != dim:
-            raise RuntimeError(
-                f"Index '{INDEX_NAME}' exists but dim={info.dimension} ≠ {dim}"
-            )
+            raise RuntimeError(f"Index '{INDEX_NAME}' exists but dim={info.dimension} ≠ {dim}")
         return
 
     print(f"🛠️  Creating Pinecone index '{INDEX_NAME}' …")
@@ -182,7 +175,7 @@ def ingest(
     index = pc.Index(INDEX_NAME)
 
     print("🔢  Embedding …")
-    vectors: List[List[float]] = []
+    vectors = []
     for i in range(0, len(chunks), batch_embed):
         vectors.extend(embed_texts(chunks[i : i + batch_embed]))
         print(f"   • embedded {min(i+batch_embed, len(chunks))}/{len(chunks)}")
@@ -212,9 +205,7 @@ def ingest(
 
 # ────────────────────────── 7. CLI ─────────────────────────────
 if __name__ == "__main__":
-    ap = argparse.ArgumentParser(
-        description="Embed & upsert a PDF manual into Pinecone."
-    )
+    ap = argparse.ArgumentParser(description="Embed & upsert a PDF manual into Pinecone.")
     ap.add_argument("pdf", help="Path to the PDF")
     ap.add_argument("--customer", default="demo01", help="Tenant name")
     ap.add_argument("--chunk_tokens", type=int, default=800, help="Max tokens / chunk")
