@@ -15,7 +15,7 @@ Usage
 
 from __future__ import annotations
 
-import os, sys, time, uuid, pathlib, argparse, itertools, math
+import os, sys, time, uuid, pathlib, argparse
 from typing import List, Tuple
 
 import pdfplumber
@@ -36,15 +36,13 @@ enc           = tiktoken.get_encoding("cl100k_base")
 
 # ────────────────────────── 2. HELPERS ─────────────────────────
 def token_len(txt: str) -> int:
-    """Return approximate token length of a string."""
     return len(enc.encode(txt))
 
 def retry(fn, *a, **kw):
-    """Tiny exponential-back-off for OpenAI calls."""
     for attempt in range(5):
         try:
             return fn(*a, **kw)
-        except RateLimitError as e:
+        except RateLimitError:
             wait = 2 ** attempt
             print(f"⚠️  Rate-limited; retrying in {wait}s …")
             time.sleep(wait)
@@ -56,10 +54,6 @@ def pdf_to_chunks(
     chunk_tokens: int,
     overlap: int,
 ) -> Tuple[List[str], List[dict]]:
-    """
-    Convert a PDF into overlapping chunks with metadata.
-    """
-    # crude product guess from filename
     fname = os.path.basename(path).lower()
     product = (
         "coffee maker" if "coffee" in fname else
@@ -74,15 +68,39 @@ def pdf_to_chunks(
     with pdfplumber.open(path) as pdf:
         all_pages = [p.extract_text() or "" for p in pdf.pages]
 
-    # • Split on paragraphs first, then token-slide
-    paragraphs: List[Tuple[str, int]] = []          # (text, page)
+    paragraphs: List[Tuple[str, int]] = []
     for pg_no, page in enumerate(all_pages, start=1):
         for para in (page.split("\n\n") or [""]):
             para = para.strip()
             if para:
                 paragraphs.append((para, pg_no))
 
-    # sliding window over paragraphs
+    # ── Define helpers BEFORE use ─────────────────────────────
+    def _flush(buffer: List[Tuple[str, int]], tok_len: int):
+        text = "\n\n".join(p for p, _ in buffer).strip()
+        first_page = buffer[0][1]
+        chunks.append(text)
+        metas.append({
+            "title":    "",
+            "product":  product,
+            "page":     first_page,
+        })
+
+    def _overlap_tail(buffer: List[Tuple[str, int]], overlap_tokens: int):
+        if overlap_tokens == 0:
+            return [], 0
+        rev = list(reversed(buffer))
+        keep: List[Tuple[str, int]] = []
+        tokens = 0
+        for para, pg in rev:
+            t = token_len(para)
+            if tokens + t > overlap_tokens and keep:
+                break
+            keep.insert(0, (para, pg))
+            tokens += t
+        return keep, tokens
+    # ─────────────────────────────────────────────────────────
+
     buf: List[Tuple[str, int]] = []
     buf_tokens = 0
     i = 0
@@ -96,56 +114,28 @@ def pdf_to_chunks(
             i += 1
         else:
             _flush(buf, buf_tokens)
-            # start new buffer with overlap
             buf, buf_tokens = _overlap_tail(buf, overlap)
-    # final flush
+
     if buf:
         _flush(buf, buf_tokens)
-
-    def _flush(buffer, tok_len):
-        text = "\n\n".join(p for p, _ in buffer).strip()
-        first_page = buffer[0][1]
-        chunks.append(text)
-        metas.append({
-            "title":    "",          # can’t reliably detect here
-            "product":  product,
-            "page":     first_page,
-        })
-
-    def _overlap_tail(buffer, overlap_tokens):
-        """Return a new buffer containing last N tokens of old buffer."""
-        if overlap_tokens == 0:
-            return [], 0
-        rev = list(reversed(buffer))
-        keep: List[Tuple[str, int]] = []
-        tokens = 0
-        for para, pg in rev:
-            para_tokens = token_len(para)
-            if tokens + para_tokens > overlap_tokens and keep:
-                break
-            keep.insert(0, (para, pg))
-            tokens += para_tokens
-        return keep, tokens
 
     return chunks, metas
 
 # ────────────────────────── 4. EMBEDDING ───────────────────────
-def embed_texts(b: List[str]) -> List[List[float]]:
-    """Embed a batch of texts with retries."""
+def embed_texts(batch: List[str]) -> List[List[float]]:
     rsp = retry(
         openai_client.embeddings.create,
         model=EMBED_MODEL,
-        input=b,
+        input=batch,
     )
     return [d.embedding for d in rsp.data]
 
 # ────────────────────────── 5. PINECONE ────────────────────────
-ENV = os.getenv("PINECONE_ENV")      # e.g. aws-us-east-1
+ENV = os.getenv("PINECONE_ENV")
 if not ENV:
     sys.exit("🟥  PINECONE_ENV missing in .env")
 
 cloud = CloudProvider.AWS if ENV.startswith("aws") else CloudProvider.GCP
-
 pc = Pinecone(api_key=os.getenv("PINECONE_API_KEY"), environment=ENV)
 
 def ensure_index(dim: int):
@@ -159,10 +149,10 @@ def ensure_index(dim: int):
 
     print(f"🛠️  Creating Pinecone index '{INDEX_NAME}' …")
     pc.create_index(
-        name      = INDEX_NAME,
-        dimension = dim,
-        metric    = "cosine",
-        spec      = ServerlessSpec(cloud=cloud, region=ENV.split("-", 1)[-1]),
+        name=INDEX_NAME,
+        dimension=dim,
+        metric="cosine",
+        spec=ServerlessSpec(cloud=cloud, region=ENV.split("-", 1)[-1]),
     )
     while not pc.describe_index(INDEX_NAME).status["ready"]:
         print("   …waiting for index to become ready")
