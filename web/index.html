@@ -5,9 +5,10 @@
   <title>AI-Manuals demo</title>
   <style>
     body   {font-family:sans-serif;max-width:680px;margin:auto;padding:20px}
-    #answer{white-space:pre-wrap;border:1px solid #ccc;padding:12px}
+    #answer{white-space:pre-wrap;border:1px solid #ccc;padding:12px;margin-top:12px}
     .fb    {font-size:20px;margin:0 6px;cursor:pointer}
     .hide  {display:none}
+    #status{margin-top:10px;font-size:14px;color:#555}
   </style>
   <meta name="api-key" content="d4d6aa9f2bf75faf76454d8621af7c01">
 </head>
@@ -16,11 +17,12 @@
 
 <h4>Upload a PDF</h4>
 <input type="file" id="pdf" />
-<button onclick="upload()">Upload</button><br /><br />
+<button onclick="upload()">Upload</button>
+<div id="status"></div>
 
 <h4>Ask a question</h4>
-<input id="q" size="60" placeholder="Type your question…" />
-<button onclick="ask()">Ask</button><br /><br />
+<input id="q" size="60" placeholder="Type your question…" disabled />
+<button onclick="ask()" id="askBtn" disabled>Ask</button><br /><br />
 
 <div id="answer"></div>
 
@@ -34,36 +36,46 @@
   <a href="/dashboard.html" target="_blank">📊 Feedback dashboard</a>
 </p>
 
-
 <script>
-// This is a demo API key. For production, override via <meta name="api-key"> in the HTML <head>.
-// Load API key from meta tag if available (fallback to hardcoded for demo)
 const API_KEY = document.querySelector('meta[name="api-key"]')?.content || "d4d6aa9f2bf75faf76454d8621af7c01";
 
-/* helper */
 function authHeaders(extra = {}) {
   return { "X-API-Key": API_KEY, ...extra };
 }
+
 let lastQuestion = "", lastAnswer = "", lastChunks = [];
 
-/* ========== upload PDF ========== */
 async function upload () {
-  if (!pdf.files[0]) return alert("Choose a PDF first!");
-  const fd = new FormData();
-  fd.append("file", pdf.files[0]);
+  const file = pdf.files[0];
+  if (!file) return alert("Choose a PDF first!");
+  if (!file.name.toLowerCase().endsWith(".pdf")) return alert("Please upload a valid PDF file.");
 
-  const r  = await fetch("/upload", {
-    method : "POST",
-    headers: authHeaders(),
-    body   : fd
-  });
-  const js = await r.json();
-  alert("Uploaded “" + js.file + "” – ready to ask questions!");
+  q.disabled = true;
+  askBtn.disabled = true;
+  status.textContent = "Uploading and ingesting… please wait.";
+
+  const fd = new FormData();
+  fd.append("file", file);
+
+  try {
+    const r  = await fetch("/upload", {
+      method : "POST",
+      headers: authHeaders(),
+      body   : fd
+    });
+    const js = await r.json();
+    status.textContent = `Uploaded “${js.file}” – ready to ask questions.`;
+    q.disabled = false;
+    askBtn.disabled = false;
+  } catch (err) {
+    status.textContent = "❌ Upload failed.";
+    alert("Upload failed: " + err);
+  }
 }
 
-/* ========== ask a question ========== */
 async function ask () {
   if (!q.value.trim()) return;
+  answer.textContent = "Thinking…";
 
   const fd = new FormData();
   fd.append("question", q.value);
@@ -89,7 +101,6 @@ async function ask () {
   fb.classList.remove("hide");
 }
 
-/* ========== send thumbs ========== */
 async function sendFeedback (score) {
   const r = await fetch("/feedback", {
     method : "POST",
@@ -102,7 +113,7 @@ async function sendFeedback (score) {
       question   : lastQuestion,
       answer     : lastAnswer,
       score      : score,
-      chunks_used: lastChunks             // server expects this field name
+      chunks_used: lastChunks
     })
   });
   const js = await r.json();
