@@ -29,10 +29,10 @@ load_dotenv(".env")
 
 INDEX_NAME  = os.getenv("PINECONE_INDEX", "manuals-small")
 EMBED_MODEL = os.getenv("OPENAI_EMBED_MODEL", "text-embedding-3-large")
-DIMENSION   = 3072                             # text-embedding-3-large
+DIMENSION   = 3072  # text-embedding-3-large
 
 openai_client = OpenAI(api_key=os.getenv("OPENAI_API_KEY"))
-enc           = tiktoken.get_encoding("cl100k_base")
+enc = tiktoken.get_encoding("cl100k_base")
 
 # ────────────────────────── 2. HELPERS ─────────────────────────
 def token_len(txt: str) -> int:
@@ -183,7 +183,7 @@ def ingest(
     print("🚚  Upserting …")
     items = [
         (
-            f"{customer}-{uuid.uuid4().hex[:8]}",
+            f"{customer}-{uuid.uuid4().hex[:8]}", 
             vec,
             {
                 **meta,
@@ -196,6 +196,7 @@ def ingest(
         )
         for i, (vec, meta) in enumerate(zip(vectors, metas))
     ]
+    print(f"   ➤ total items: {len(items)}")
 
     for j in range(0, len(items), batch_upsert):
         index.upsert(items[j : j + batch_upsert])
