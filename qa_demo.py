@@ -22,10 +22,10 @@ dotenv.load_dotenv(".env")
 
 DEBUG = True
 
-EMBED_MODEL = os.getenv("OPENAI_EMBED_MODEL", "text-embedding-3-large")
+EMBED_MODEL = os.getenv("OPENAI_EMBED_MODEL", "text-embedding-3-small")
 CHAT_MODEL  = os.getenv("OPENAI_CHAT_MODEL",  "gpt-4o")
 INDEX_NAME  = os.getenv("PINECONE_INDEX",     "manuals-small")
-DIM         = 3072                            # text-embedding-3-large
+DIM         = 1536                            # text-embedding-3-small
 
 pc = Pinecone(
     api_key     = os.getenv("PINECONE_API_KEY"),
