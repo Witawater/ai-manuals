@@ -28,8 +28,8 @@ from pinecone import Pinecone, ServerlessSpec, CloudProvider
 load_dotenv(".env")
 
 INDEX_NAME  = os.getenv("PINECONE_INDEX", "manuals-small")
-EMBED_MODEL = os.getenv("OPENAI_EMBED_MODEL", "text-embedding-3-large")
-DIMENSION   = 3072  # text-embedding-3-large
+EMBED_MODEL = os.getenv("OPENAI_EMBED_MODEL", "text-embedding-3-small")
+DIMENSION   = 1536  # text-embedding-3-small
 
 openai_client = OpenAI(api_key=os.getenv("OPENAI_API_KEY"))
 enc = tiktoken.get_encoding("cl100k_base")
@@ -58,9 +58,10 @@ def pdf_to_chunks(path: str, chunk_tokens: int, overlap: int) -> Tuple[List[str]
         "machine"
     )
 
-    chunks: List[str]  = []
+    chunks: List[str] = []
     metas : List[dict] = []
 
+    import pdfplumber
     with pdfplumber.open(path) as pdf:
         all_pages = [p.extract_text() or "" for p in pdf.pages]
 
@@ -76,9 +77,9 @@ def pdf_to_chunks(path: str, chunk_tokens: int, overlap: int) -> Tuple[List[str]
         first_page = buffer[0][1]
         chunks.append(text)
         metas.append({
-            "title":    "",
-            "product":  product,
-            "page":     first_page,
+            "title":   "",
+            "product": product,
+            "page":    first_page,
         })
 
     def _overlap_tail(buffer, overlap_tokens):
@@ -114,6 +115,7 @@ def pdf_to_chunks(path: str, chunk_tokens: int, overlap: int) -> Tuple[List[str]
         _flush(buf, buf_tokens)
 
     return chunks, metas
+
 
 # ────────────────────────── 4. EMBEDDING ───────────────────────
 def embed_texts(batch: List[str]) -> List[List[float]]:
