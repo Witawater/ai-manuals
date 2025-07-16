@@ -26,7 +26,8 @@ import pdfplumber
 import tiktoken
 from dotenv import load_dotenv
 from openai import OpenAI, RateLimitError
-from pinecone import Pinecone, ServerlessSpec, CloudProvider
+import pinecone
+from pinecone import ServerlessSpec, Pinecone
 
 # ──────────────── 1. CONFIG ────────────────
 load_dotenv(".env")
@@ -133,9 +134,7 @@ ENV = os.getenv("PINECONE_ENV")
 if not ENV:
     sys.exit("🟥  PINECONE_ENV missing in .env")
 
-cloud = CloudProvider.AWS if ENV.startswith("aws") else CloudProvider.GCP
-
-pc = Pinecone(api_key=os.getenv("PINECONE_API_KEY"), environment=ENV)
+pc = Pinecone(api_key=os.getenv("PINECONE_API_KEY"))
 
 def ensure_index(dim: int):
     if INDEX_NAME in pc.list_indexes().names():
