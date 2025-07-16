@@ -35,7 +35,7 @@ INDEX_NAME  = os.getenv("PINECONE_INDEX", "manuals-small")
 EMBED_MODEL = os.getenv("OPENAI_EMBED_MODEL", "text-embedding-3-small")
 DIMENSION = 3072 if "large" in EMBED_MODEL else 1536
 
-openai_client = OpenAI()
+openai_client = OpenAI(api_key=os.getenv("OPENAI_API_KEY"))
 enc = tiktoken.get_encoding("cl100k_base")
 
 # ──────────────── 2. HELPERS ────────────────
@@ -82,6 +82,7 @@ def pdf_to_chunks(path: str, chunk_tokens: int, overlap: int) -> Tuple[List[str]
             "title":   "",
             "product": product,
             "page":    first_page,
+            "filename": os.path.basename(path),
         })
 
     def _overlap_tail(buffer, overlap_tokens):
