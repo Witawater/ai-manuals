@@ -11,6 +11,11 @@ Usage
         --customer demo01 \
         --chunk_tokens 800 \
         --overlap 150
+
+Configuration
+─────────────
+    Reads environment variables from .env for Pinecone and OpenAI keys.
+    Embedding dimension is inferred from the embedding model selected.
 """
 
 from __future__ import annotations
@@ -28,7 +33,7 @@ load_dotenv(".env")
 
 INDEX_NAME  = os.getenv("PINECONE_INDEX", "manuals-small")
 EMBED_MODEL = os.getenv("OPENAI_EMBED_MODEL", "text-embedding-3-small")
-DIMENSION   = 1536  # text-embedding-3-small
+DIMENSION = 3072 if "large" in EMBED_MODEL else 1536
 
 openai_client = OpenAI(api_key=os.getenv("OPENAI_API_KEY"))
 enc = tiktoken.get_encoding("cl100k_base")
@@ -65,10 +70,9 @@ def pdf_to_chunks(path: str, chunk_tokens: int, overlap: int) -> Tuple[List[str]
 
     paragraphs: List[Tuple[str, int]] = []
     for pg_no, page in enumerate(all_pages, start=1):
-        for para in (page.split("\n\n") or [""]):
-            para = para.strip()
-            if para:
-                paragraphs.append((para, pg_no))
+        for para in page.splitlines():
+            if para.strip():
+                paragraphs.append((para.strip(), pg_no))
 
     def _flush(buffer, tok_len):
         text = "\n\n".join(p for p, _ in buffer).strip()
@@ -208,8 +212,8 @@ if __name__ == "__main__":
     ap = argparse.ArgumentParser(description="Embed & upsert a PDF manual into Pinecone.")
     ap.add_argument("pdf", help="Path to the PDF")
     ap.add_argument("--customer", default="demo01", help="Tenant name")
-    ap.add_argument("--chunk_tokens", type=int, default=800, help="Max tokens / chunk")
-    ap.add_argument("--overlap", type=int, default=150, help="Overlap tokens")
+    ap.add_argument("--chunk_tokens", type=int, default=800, help="Max tokens per chunk (default: 800)")
+    ap.add_argument("--overlap", type=int, default=150, help="Token overlap between chunks (default: 150)")
     ap.add_argument("--dry", action="store_true", help="Preview chunks only")
     args = ap.parse_args()
 

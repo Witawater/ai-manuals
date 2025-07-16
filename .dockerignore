@@ -1,5 +1,6 @@
 # Ignore Python cache and compiled files
 __pycache__/
+**/__pycache__/
 *.py[cod]
 *.pyo
 
@@ -12,6 +13,9 @@ venv/
 .coverage
 coverage.xml
 
+# Ignore environment variables
+.env
+
 # Ignore PDFs and manuals
 *.pdf
 
@@ -23,11 +27,10 @@ Thumbs.db
 .vscode/
 *.swp
 
-# Ignore Git and related metadata
+# Ignore Git metadata
 .git/
-.gitignore
 
-# Ignore package info and wheels
+# Ignore packaging artifacts
 *.egg-info/
 dist/
 build/

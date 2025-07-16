@@ -12,6 +12,7 @@ import os, time, re
 from typing import Dict, List
 
 import dotenv
+import tiktoken
 from openai   import OpenAI
 from pinecone import Pinecone, ServerlessSpec, CloudProvider
 
@@ -23,7 +24,13 @@ DEBUG = True
 EMBED_MODEL = os.getenv("OPENAI_EMBED_MODEL", "text-embedding-3-small")
 CHAT_MODEL  = os.getenv("OPENAI_CHAT_MODEL",  "gpt-4o")
 INDEX_NAME  = os.getenv("PINECONE_INDEX",     "manuals-small")
-DIM         = 1536
+
+# Determine embedding dimension from tiktoken
+try:
+    DIM = len(tiktoken.get_encoding("cl100k_base").encode("This is a test string"))
+    if "large" in EMBED_MODEL: DIM = 3072
+except:
+    DIM = 1536
 
 ENV         = os.getenv("PINECONE_ENV", "")
 REGION      = ENV.split("-", 1)[-1] or "us-east1"

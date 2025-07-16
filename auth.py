@@ -13,6 +13,9 @@ api_key_header = APIKeyHeader(name="X-API-Key", auto_error=False)
 
 # Dependency to enforce API key auth
 def require_api_key(key: str = Depends(api_key_header)):
+    """FastAPI dependency that validates X-API-Key header against environment value."""
+    if not API_KEY:
+        raise RuntimeError("Missing API_KEY in environment. Check your .env file.")
     if key == API_KEY:
         return True
     raise HTTPException(

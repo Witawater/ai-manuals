@@ -1,22 +1,26 @@
 FROM python:3.11-slim
 
 # ─── Install required OS packages ───────────────
-RUN apt-get update && apt-get install -y \
+RUN apt-get update && apt-get install -y --no-install-recommends \
     build-essential \
     libjpeg-dev \
     poppler-utils \
     gcc \
     curl \
     libpq-dev \
+    && apt-get clean \
     && rm -rf /var/lib/apt/lists/*
 
 # ─── App setup ───────────────────────────────────
 WORKDIR /app
-COPY . /app
+COPY requirements.txt .
 
 # ─── Install Python deps ─────────────────────────
 RUN python -m pip install --upgrade pip && \
     pip install --no-cache-dir -r requirements.txt
+
+# ─── Copy rest of the app ────────────────────────
+COPY . .
 
 # ─── Port and start ──────────────────────────────
 ENV PORT=8000

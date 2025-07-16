@@ -1,3 +1,31 @@
 venv/
 __pycache__/
 .env
+
+# Python virtual environment
+venv/
+
+# Bytecode and cache
+__pycache__/
+*.py[cod]
+
+# Environment variables
+.env
+
+# Logs
+*.log
+
+# macOS system files
+.DS_Store
+
+# VSCode settings
+.vscode/
+
+# PDF and output artifacts
+*.pdf
+*.db
+*.sqlite3
+
+# Build artifacts
+dist/
+*.egg-info/

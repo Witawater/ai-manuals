@@ -3,6 +3,8 @@ import re
 import uuid
 import json
 from pathlib import Path
+import tiktoken
+import sys
 
 def read_pdf(path):
     doc = fitz.open(path)
@@ -12,6 +14,7 @@ def read_pdf(path):
 def split_into_chunks(pages):
     chunks = []
     current_section = None
+    enc = tiktoken.get_encoding("cl100k_base")
 
     for i, text in enumerate(pages, start=1):
         lines = text.splitlines()
@@ -22,13 +25,13 @@ def split_into_chunks(pages):
                 continue
 
             # Detect section headings (very rough)
-            if re.match(r"^\d+(\.\d+)*\s+[A-Z][\w\s\-]+$", line):
+            if re.match(r"^\d+(\.\d+)*\s+.+$", line) and len(line.split()) <= 10:
                 if buffer:
                     content = "\n".join(buffer)
                     chunks.append({
                         "id": str(uuid.uuid4())[:8],
                         "text": content,
-                        "tokens": len(content.split()),
+                        "tokens": len(enc.encode(content)),
                         "section": (current_section or "Untitled").strip(),
                         "page": i
                     })
@@ -42,7 +45,7 @@ def split_into_chunks(pages):
             chunks.append({
                 "id": str(uuid.uuid4())[:8],
                 "text": content,
-                "tokens": len(content.split()),
+                "tokens": len(enc.encode(content)),
                 "section": (current_section or "Untitled").strip(),
                 "page": i
             })
@@ -54,11 +57,12 @@ def preview(chunks, n=3):
         print(f"[{c['section']}] (p{c['page']}) → {len(c['text'])} chars, {c['tokens']} tokens\n")
 
 if __name__ == "__main__":
-    PDF_PATH = "Test Manual.pdf"
+    PDF_PATH = sys.argv[1] if len(sys.argv) > 1 else "Test Manual.pdf"
     pages = read_pdf(PDF_PATH)
     chunks = split_into_chunks(pages)
     preview(chunks)
 
     # Optional: save to file
-    with open("test_chunks.json", "w") as f:
-        json.dump(chunks, f, indent=2)
+    if "--save" in sys.argv:
+        with open("test_chunks.json", "w") as f:
+            json.dump(chunks, f, indent=2)

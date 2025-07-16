@@ -75,30 +75,39 @@ async function upload () {
 
 async function ask () {
   if (!q.value.trim()) return;
+  askBtn.disabled = true;
   answer.textContent = "Thinking…";
 
   const fd = new FormData();
   fd.append("question", q.value);
 
-  const r  = await fetch("/chat", {
-    method : "POST",
-    headers: authHeaders(),
-    body   : fd
-  });
-  const js = await r.json();
+  try {
+    const r  = await fetch("/chat", {
+      method : "POST",
+      headers: authHeaders(),
+      body   : fd
+    });
+    const js = await r.json();
 
-  lastQuestion = q.value;
-  lastAnswer   = js.answer;
-  lastChunks   = js.chunks_used ?? js.chunks ?? [];
+    lastQuestion = q.value;
+    lastAnswer   = js.answer;
+    lastChunks   = js.chunks_used ?? js.chunks ?? [];
 
-  if (js.grounded === false) {
-    answer.innerHTML =
-      `<i>${js.answer}</i><br><small>⚠︎ Not from manual</small>`;
-  } else {
-    answer.textContent = js.answer;
+    if (js.grounded === false) {
+      answer.innerHTML =
+        `<i>${js.answer}</i><br><small>⚠︎ Not from manual</small>`;
+    } else {
+      answer.textContent = js.answer;
+    }
+
+    fb.classList.remove("hide");
+  } catch (err) {
+    answer.textContent = "❌ Request failed.";
+    alert("Question failed: " + err);
+  } finally {
+    askBtn.disabled = false;
+    answer.scrollIntoView({ behavior: "smooth" });
   }
-
-  fb.classList.remove("hide");
 }
 
 async function sendFeedback (score) {
