@@ -15,9 +15,7 @@ import dotenv
 from openai   import OpenAI
 from pinecone import Pinecone, ServerlessSpec, CloudProvider
 
-# ───────────────────────────────────────────────
-# 1. Secrets & clients
-# ───────────────────────────────────────────────
+# ───── 1. Secrets & clients ─────
 dotenv.load_dotenv(".env")
 
 DEBUG = True
@@ -25,91 +23,50 @@ DEBUG = True
 EMBED_MODEL = os.getenv("OPENAI_EMBED_MODEL", "text-embedding-3-small")
 CHAT_MODEL  = os.getenv("OPENAI_CHAT_MODEL",  "gpt-4o")
 INDEX_NAME  = os.getenv("PINECONE_INDEX",     "manuals-small")
-DIM         = 1536                            # text-embedding-3-small
+DIM         = 1536
 
-pc = Pinecone(
-    api_key     = os.getenv("PINECONE_API_KEY"),
-    environment = os.getenv("PINECONE_ENV") or "",   # e.g. aws-us-east-1
-)
-client = OpenAI(api_key=os.getenv("OPENAI_API_KEY"))
+ENV         = os.getenv("PINECONE_ENV", "")
+REGION      = ENV.split("-", 1)[-1] or "us-east1"
+cloud       = CloudProvider.AWS if "aws" in ENV else CloudProvider.GCP
 
-# ───────────────────────────────────────────────
-# 2. Ensure the index exists & dimension matches
-# ───────────────────────────────────────────────
+pc      = Pinecone(api_key=os.getenv("PINECONE_API_KEY"), environment=ENV)
+client  = OpenAI(api_key=os.getenv("OPENAI_API_KEY"))
+
+# ───── 2. Ensure Pinecone index exists ─────
 if INDEX_NAME not in pc.list_indexes().names():
-    if DEBUG: print(f"ℹ️  '{INDEX_NAME}' missing – creating an empty one …")
-    cloud  = CloudProvider.AWS if "aws" in os.getenv("PINECONE_ENV", "") \
-            else CloudProvider.GCP
-    region = os.getenv("PINECONE_ENV", "").split("-", 1)[-1] or "us-east1"
+    print(f"ℹ️  '{INDEX_NAME}' missing – creating a new one …")
     pc.create_index(
-        INDEX_NAME,
+        name=INDEX_NAME,
         dimension=DIM,
         metric="cosine",
-        spec=ServerlessSpec(cloud=cloud, region=region),
+        spec=ServerlessSpec(cloud=cloud, region=REGION),
     )
     while not pc.describe_index(INDEX_NAME).status["ready"]:
         time.sleep(2)
-    if DEBUG: print("✅  Index ready — ingest a PDF before chatting.")
+    print("✅  Index ready.")
 else:
     info = pc.describe_index(INDEX_NAME)
     if info.dimension != DIM:
         raise RuntimeError(
-            f"Index '{INDEX_NAME}' dim {info.dimension} ≠ {DIM}.\n"
-            "Delete it or point PINECONE_INDEX to a fresh name."
+            f"Index '{INDEX_NAME}' has dim={info.dimension}, expected {DIM}.\n"
+            "Either delete it or change your config."
         )
 
-idx = pc.Index(INDEX_NAME)   # host auto-resolved
+idx = pc.Index(INDEX_NAME)
 
-# ───────────────────────────────────────────────
-# 3. Q-and-A helper
-# ───────────────────────────────────────────────
+# ───── 3. Q-and-A helper ─────
 def chat(
-    question      : str,
-    customer      : str = "demo01",
-    top_k         : int = 50,
-    concise       : bool = False,
-    fallback      : bool = True,   # allow GPT fallback
-    rerank_keep   : int = 4,       # keep N chunks after re-rank
-    fallback_cut  : float = 0.35,  # similarity threshold
+    question: str,
+    customer: str = "demo01",
+    top_k: int = 50,
+    concise: bool = False,
+    fallback: bool = True,
+    rerank_keep: int = 4,
+    fallback_cut: float = 0.35,
 ) -> Dict[str, object]:
-    """
-    Returns
-      {
-        "answer"     : "...",
-        "chunks_used": ["vec-id-1", …],   # 0-length if fallback
-        "grounded"   : bool,              # True = from manual
-        "confidence" : float              # ad-hoc 0-1
-      }
-    """
 
-    # 3-1)  Embed → initial search (to infer product name)
-    q_vec_initial = client.embeddings.create(
-        model=EMBED_MODEL, input=question
-    ).data[0].embedding
-
-    resp_initial = idx.query(
-        vector=q_vec_initial,
-        top_k=top_k,
-        filter={"customer": {"$eq": customer}},
-        include_metadata=True
-    )
-    product_name = (
-        resp_initial.matches[0].metadata.get("product", "machine")
-        if resp_initial.matches else "machine"
-    )
-
-    # Normalise “the unit/device” ↔ concrete product name
-    def normalise(q: str, name: str) -> str:
-        return re.sub(
-            r"\b(the\s)?(machine|unit|device|appliance)\b",
-            name,
-            q,
-            flags=re.IGNORECASE,
-        )
-
-    q_norm  = normalise(question, product_name)
-    q_vec   = client.embeddings.create(model=EMBED_MODEL, input=q_norm).data[0].embedding
-
+    # 3-1) Embed & initial search
+    q_vec = client.embeddings.create(model=EMBED_MODEL, input=question).data[0].embedding
     resp = idx.query(
         vector=q_vec,
         top_k=top_k,
@@ -117,91 +74,84 @@ def chat(
         include_metadata=True
     )
 
+    if not resp.matches:
+        product_name = "machine"
+    else:
+        product_name = resp.matches[0].metadata.get("product", "machine")
+
+    def normalise(q: str, name: str) -> str:
+        return re.sub(r"\b(the\s)?(machine|unit|device|appliance)\b", name, q, flags=re.IGNORECASE)
+
+    q_norm = normalise(question, product_name)
+    q_vec = client.embeddings.create(model=EMBED_MODEL, input=q_norm).data[0].embedding
+    resp = idx.query(vector=q_vec, top_k=top_k, filter={"customer": {"$eq": customer}}, include_metadata=True)
+
     if DEBUG:
-        print(f"ℹ️ Top {len(resp.matches)} retrieved chunks:")
-        for i, m in enumerate(resp.matches[:6]):  # show first 6
-            snippet = m.metadata.get("text", "")[:120].replace("\n", " ")
-            print(f"  [{i}] score={m.score:.4f} “{snippet}…”")
+        print(f"\nℹ️ Top {len(resp.matches)} retrieved chunks:")
+        for i, m in enumerate(resp.matches[:6]):
+            print(f"  [{i}] score={m.score:.4f} → {m.metadata.get('text', '')[:100].replace('\n', ' ')}…")
 
-    # 3-2) Decide fallback
-    have_docs = (
-        bool(resp.matches) and
-        (sum(m.score for m in resp.matches[:2]) / max(1, len(resp.matches[:2]))) > fallback_cut
-    )
+    # 3-2) Fallback logic
+    have_docs = bool(resp.matches) and (
+        sum(m.score for m in resp.matches[:2]) / max(1, len(resp.matches[:2]))
+    ) > fallback_cut
+
     if not have_docs and not fallback:
-        return {
-            "answer":      "I couldn't find anything relevant in this manual.",
-            "chunks_used": [],
-            "grounded":    True,
-            "confidence":  0.0,
-        }
+        return {"answer": "I couldn't find anything in the manual.", "chunks_used": [], "grounded": True, "confidence": 0.0}
 
-    # 3-3) GPT fallback branch
+    # 3-3) Fallback to GPT general
     if not have_docs:
         sys_prompt = (
-            "You are a knowledgeable support agent. "
-            "The official manual does not cover the user's question. "
-            "If you can answer from general domain knowledge, do so clearly. "
-            "Otherwise say you don't have enough information."
+            "You are a helpful assistant. The manual doesn't answer this. "
+            "If general knowledge helps, answer clearly. Otherwise say so."
         )
-        answer = client.chat.completions.create(
+        fallback_ans = client.chat.completions.create(
             model=CHAT_MODEL,
             messages=[
                 {"role": "system", "content": sys_prompt},
-                {"role": "user",   "content": q_norm},
+                {"role": "user",   "content": q_norm}
             ],
             temperature=0.3,
         ).choices[0].message.content.strip()
 
         return {
-            "answer":      "(General guidance – not in manual) " + answer,
+            "answer": "(General guidance – not in manual) " + fallback_ans,
             "chunks_used": [],
-            "grounded":    False,
-            "confidence":  0.4,
+            "grounded": False,
+            "confidence": 0.4,
         }
 
-    # 3-4) Re-rank chunks with GPT
-    rerank_prompt = f"""You are selecting the most relevant manual chunks to answer the user’s question.
+    # 3-4) Rerank
+    rerank_prompt = f"""You are selecting the most relevant chunks for the question.
 
 QUESTION:
 {q_norm}
 
 CHUNKS:
 """ + "\n\n".join(
-        f"[{i}] {m.metadata['text'][:400].strip()}"
-        for i, m in enumerate(resp.matches)
+        f"[{i}] {m.metadata.get('text', '')[:400].strip()}" for i, m in enumerate(resp.matches)
     ) + f"""
 
-Return ONLY the numbers of the {rerank_keep} most relevant chunks, comma-separated (e.g. 0,2,3,7).
-If none are clearly relevant, return an empty list.
-"""
+Return the numbers of the {rerank_keep} most relevant chunks, comma-separated (e.g. 0,2,3,7)."""
+
     best = client.chat.completions.create(
         model=CHAT_MODEL,
         messages=[{"role": "user", "content": rerank_prompt}],
         temperature=0,
     ).choices[0].message.content.strip()
 
-    if DEBUG: print(f"ℹ️ Rerank chose: {best}")
+    if DEBUG: print("ℹ️ Rerank chose:", best)
 
     try:
-        keep = {int(x) for x in re.split(r"[,\s]+", best) if x.isdigit()}
+        keep = {int(x) for x in re.split(r"[,\s]+", best) if x.strip().isdigit()}
     except Exception:
         keep = set()
 
-    resp.matches = (
-        [m for i, m in enumerate(resp.matches) if i in keep][:rerank_keep]
-        if keep else
-        resp.matches[:rerank_keep]
-    )
+    resp.matches = [m for i, m in enumerate(resp.matches) if i in keep][:rerank_keep] if keep else resp.matches[:rerank_keep]
     if not resp.matches:
-        return {
-            "answer":      "I couldn't find anything relevant in this manual.",
-            "chunks_used": [],
-            "grounded":    False,
-            "confidence":  0.0,
-        }
+        return {"answer": "I couldn't find anything relevant.", "chunks_used": [], "grounded": False, "confidence": 0.0}
 
-    # 3-5) Build context (full chunk, trimmed to ~1 500 chars)
+    # 3-5) Build context
     context_parts: List[str] = []
     for i, m in enumerate(resp.matches, start=1):
         tag  = f"[{i}]"
@@ -209,54 +159,41 @@ If none are clearly relevant, return an empty list.
         context_parts.append(f"{tag} {text}")
 
     context = "\n\n".join(context_parts)
-
     if DEBUG:
-        print("ℹ️ Context for final answer (truncated to 1 k chars):")
-        print(context[:1000] + ("…" if len(context) > 1000 else ""))
+        print("ℹ️ Context sample:\n", context[:1000] + ("…" if len(context) > 1000 else ""))
 
-    # 3-6) Final answer
-    system_prompt = (
-        "You are a technical assistant answering strictly from the provided manual excerpts. "
-        "Cite sources like [1], [2]. If the excerpts don't answer, say you don't have that info."
+    # 3-6) GPT final answer
+    sys_prompt = (
+        "You are a technical assistant answering strictly from the manual chunks. "
+        "Cite sources like [1], [2]. If the excerpts don't answer, say so."
     )
     user_prompt = (
-        f"{context}\n\n"
-        f"► QUESTION: {q_norm}\n\n"
-        + (
-            "Answer in 2-4 sentences and cite sources."
-            if concise else
-            "Write a complete, precise answer and cite only relevant sources."
-        )
+        f"{context}\n\n► QUESTION: {q_norm}\n\n" +
+        ("Answer in 2–4 sentences and cite sources." if concise else "Write a precise answer with only relevant citations.")
     )
+
     answer = client.chat.completions.create(
         model=CHAT_MODEL,
         messages=[
-            {"role": "system", "content": system_prompt},
-            {"role": "user",   "content": user_prompt},
+            {"role": "system", "content": sys_prompt},
+            {"role": "user",   "content": user_prompt}
         ],
         temperature=0,
     ).choices[0].message.content.strip()
-
-    if DEBUG: print("ℹ️ Answer:", answer)
-
-    # Naïve confidence: similarity of best chunk (0-1) clipped
-    confidence = min(max(resp.matches[0].score, 0.0), 1.0)
 
     return {
         "answer":      answer,
         "chunks_used": [m.id for m in resp.matches],
         "grounded":    True,
-        "confidence":  confidence,
+        "confidence":  min(max(resp.matches[0].score, 0.0), 1.0),
     }
 
-# ───────────────────────────────────────────────
-# 4. Smoke-test
-# ───────────────────────────────────────────────
+# ───── 4. Smoke test ─────
 if __name__ == "__main__":
     for q in [
         "How do I descale the coffee maker?",
         "Can I change the brew strength?",
-        "What is 2 + 2?",  # should trigger fallback
+        "What is 2 + 2?",  # fallback
     ]:
         print(f"\nQ: {q}")
         out = chat(q, concise=True)
