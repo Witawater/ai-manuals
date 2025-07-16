@@ -36,7 +36,7 @@ INDEX_NAME  = os.getenv("PINECONE_INDEX", "manuals-small")
 EMBED_MODEL = os.getenv("OPENAI_EMBED_MODEL", "text-embedding-3-small")
 DIMENSION = 3072 if "large" in EMBED_MODEL else 1536
 
-openai_client = OpenAI()
+openai_client = OpenAI(api_key=os.environ["OPENAI_API_KEY"])
 enc = tiktoken.get_encoding("cl100k_base")
 
 # ──────────────── 2. HELPERS ────────────────
@@ -144,11 +144,13 @@ def ensure_index(dim: int):
         return
 
     print(f"🛠️  Creating Pinecone index '{INDEX_NAME}' …")
+    cloud = "aws"  # default to AWS; adjust if you're using a different provider
+    region = ENV.split("-")[-2] + "-" + ENV.split("-")[-1]
     pc.create_index(
         name=INDEX_NAME,
         dimension=dim,
         metric="cosine",
-        spec=ServerlessSpec(cloud=cloud, region=ENV.split("-", 1)[-1]),
+        spec=ServerlessSpec(cloud=cloud, region=region),
     )
     while not pc.describe_index(INDEX_NAME).status["ready"]:
         print("   …waiting for index to become ready")
