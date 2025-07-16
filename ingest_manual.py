@@ -14,7 +14,6 @@ Usage
 """
 
 from __future__ import annotations
-
 import os, sys, time, uuid, pathlib, argparse
 from typing import List, Tuple
 
@@ -24,7 +23,7 @@ from dotenv import load_dotenv
 from openai import OpenAI, RateLimitError
 from pinecone import Pinecone, ServerlessSpec, CloudProvider
 
-# ────────────────────────── 1. CONFIG ──────────────────────────
+# ──────────────── 1. CONFIG ────────────────
 load_dotenv(".env")
 
 INDEX_NAME  = os.getenv("PINECONE_INDEX", "manuals-small")
@@ -34,7 +33,7 @@ DIMENSION   = 1536  # text-embedding-3-small
 openai_client = OpenAI(api_key=os.getenv("OPENAI_API_KEY"))
 enc = tiktoken.get_encoding("cl100k_base")
 
-# ────────────────────────── 2. HELPERS ─────────────────────────
+# ──────────────── 2. HELPERS ────────────────
 def token_len(txt: str) -> int:
     return len(enc.encode(txt))
 
@@ -48,7 +47,7 @@ def retry(fn, *a, **kw):
             time.sleep(wait)
     raise RuntimeError("Too many rate-limit failures.")
 
-# ───────────────────── 3. CHUNKING LOGIC ───────────────────────
+# ───── 3. CHUNKING LOGIC ─────
 def pdf_to_chunks(path: str, chunk_tokens: int, overlap: int) -> Tuple[List[str], List[dict]]:
     fname = os.path.basename(path).lower()
     product = (
@@ -61,7 +60,6 @@ def pdf_to_chunks(path: str, chunk_tokens: int, overlap: int) -> Tuple[List[str]
     chunks: List[str] = []
     metas : List[dict] = []
 
-    import pdfplumber
     with pdfplumber.open(path) as pdf:
         all_pages = [p.extract_text() or "" for p in pdf.pages]
 
@@ -116,8 +114,7 @@ def pdf_to_chunks(path: str, chunk_tokens: int, overlap: int) -> Tuple[List[str]
 
     return chunks, metas
 
-
-# ────────────────────────── 4. EMBEDDING ───────────────────────
+# ───── 4. EMBEDDING ─────
 def embed_texts(batch: List[str]) -> List[List[float]]:
     rsp = retry(
         openai_client.embeddings.create,
@@ -126,7 +123,7 @@ def embed_texts(batch: List[str]) -> List[List[float]]:
     )
     return [d.embedding for d in rsp.data]
 
-# ────────────────────────── 5. PINECONE ────────────────────────
+# ───── 5. PINECONE ─────
 ENV = os.getenv("PINECONE_ENV")
 if not ENV:
     sys.exit("🟥  PINECONE_ENV missing in .env")
@@ -154,7 +151,7 @@ def ensure_index(dim: int):
         time.sleep(2)
     print("✅  Index ready.")
 
-# ────────────────────────── 6. INGEST ──────────────────────────
+# ───── 6. INGEST ─────
 def ingest(
     pdf_path: str,
     customer: str,
@@ -206,7 +203,7 @@ def ingest(
 
     print(f"✅  Ingested {len(chunks)} chunks into '{INDEX_NAME}'.")
 
-# ────────────────────────── 7. CLI ─────────────────────────────
+# ───── 7. CLI ─────
 if __name__ == "__main__":
     ap = argparse.ArgumentParser(description="Embed & upsert a PDF manual into Pinecone.")
     ap.add_argument("pdf", help="Path to the PDF")
