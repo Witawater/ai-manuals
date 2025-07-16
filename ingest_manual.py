@@ -36,7 +36,7 @@ INDEX_NAME  = os.getenv("PINECONE_INDEX", "manuals-small")
 EMBED_MODEL = os.getenv("OPENAI_EMBED_MODEL", "text-embedding-3-small")
 DIMENSION = 3072 if "large" in EMBED_MODEL else 1536
 
-openai_client = OpenAI(api_key=os.getenv("OPENAI_API_KEY"))
+openai_client = OpenAI()
 enc = tiktoken.get_encoding("cl100k_base")
 
 # ──────────────── 2. HELPERS ────────────────
