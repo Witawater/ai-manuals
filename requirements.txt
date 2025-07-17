@@ -28,10 +28,7 @@ packaging==24.2
 pdfminer.six==20250506
 pdfplumber==0.11.7
 pillow==11.2.1
-pinecone==7.3.0
 pinecone-client==3.2.2
-pinecone-plugin-assistant==1.7.0
-pinecone-plugin-interface==0.0.7
 propcache==0.3.2
 protobuf==5.29.5
 protoc-gen-openapiv2==0.0.1
