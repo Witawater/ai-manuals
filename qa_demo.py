@@ -96,7 +96,8 @@ def chat(
     if DEBUG:
         print(f"\nℹ️ Top {len(resp.matches)} retrieved chunks:")
         for i, m in enumerate(resp.matches[:6]):
-            print(f"  [{i}] score={m.score:.4f} → {m.metadata.get('text', '')[:100].replace('\n', ' ')}…")
+            text_snippet = m.metadata.get("text", "")[:100].replace("\n", " ")
+            print(f"  [{i}] score={m.score:.4f} → {text_snippet}…")
 
     # 3-2) Fallback logic
     have_docs = bool(resp.matches) and (
