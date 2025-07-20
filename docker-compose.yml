@@ -1,13 +1,40 @@
+version: "3.9"
+
 services:
+  # ────────────────────────── 1) API + RAG worker ───────────────────────────
   rag-manuals:
     container_name: ai-manuals-app
     build:
       context: .
       dockerfile: Dockerfile
-    env_file: .env
+    env_file: .env            # <- keep secrets out of YAML
     working_dir: /app
     ports:
       - "8000:8000"
     volumes:
-      - .:/app
+      - .:/app                # live-reload in dev; comment out in prod
+    depends_on:
+      - postgres
     restart: unless-stopped
+
+  # ────────────────────────── 2) Postgres database ───────────────────────────
+  postgres:
+    image: postgres:16
+    container_name: ai-manuals-db
+    environment:
+      POSTGRES_DB:     ${POSTGRES_DB:-aimanuals}
+      POSTGRES_USER:   ${POSTGRES_USER:-aimanuals}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-change-me}
+    ports:
+      - "5432:5432"     # expose only if you need local psql access
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U $$POSTGRES_USER"]
+      interval: 10s
+      retries: 5
+      start_period: 15s
+    restart: unless-stopped
+
+volumes:
+  pgdata:
