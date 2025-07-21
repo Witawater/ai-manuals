@@ -1,23 +1,19 @@
 #!/usr/bin/env python3
 """
-ingest_manual.py
-────────────────
-Chunk ➜ embed ➜ upsert ONE PDF into Pinecone.
-
-Usage
-─────
+ingest_manual.py – Chunk → Embed → Upsert ONE PDF into Pinecone
+────────────────────────────────────────────────────────────────
+Usage:
     python ingest_manual.py CoffeeMaker.pdf \
         --customer demo01 \
         --chunk_tokens 800 \
         --overlap 150
 
-Notes
-─────
-• Reads OpenAI + Pinecone keys from .env.
+Key points
+──────────
+• Reads OPENAI + Pinecone keys from .env.
 • Embedding dimension inferred from `OPENAI_EMBED_MODEL`.
-• Robust handling of PINECONE_ENV formats (
-    aws-us-east-1, gcp-us-central1, etc.).
-• Auto‑creates the index if missing, with dimension sanity check.
+• Robustly parses PINECONE_ENV (e.g. aws-us-east-1, gcp-us-central1).
+• Auto‑creates the index if missing and validates its dimension.
 """
 
 from __future__ import annotations
@@ -34,7 +30,7 @@ import pdfplumber
 import tiktoken
 from dotenv import load_dotenv
 from openai import OpenAI, RateLimitError
-from pinecone import CloudProvider, Pinecone, ServerlessSpec
+from pinecone import ServerlessSpec, Pinecone
 
 # ─────────────── 1. CONFIG ───────────────
 load_dotenv(".env")
@@ -48,12 +44,13 @@ enc = tiktoken.get_encoding("cl100k_base")
 
 # ─────────────── 2. HELPERS ───────────────
 
-def token_len(txt: str) -> int:  # len in tokens, not chars
+def token_len(txt: str) -> int:
+    """Return token length (tiktoken count) instead of characters."""
     return len(enc.encode(txt))
 
 
 def retry(fn, *a, **kw):
-    """Simple exponential‑backoff retry for RateLimitError."""
+    """Simple exponential‑backoff retry for OpenAI RateLimitError."""
     for attempt in range(5):
         try:
             return fn(*a, **kw)
@@ -66,7 +63,12 @@ def retry(fn, *a, **kw):
 
 # ───── 3. CHUNKING LOGIC ─────
 
-def pdf_to_chunks(path: str, chunk_tokens: int, overlap: int) -> Tuple[List[str], List[dict]]:
+def pdf_to_chunks(
+    path: str,
+    chunk_tokens: int,
+    overlap: int,
+) -> Tuple[List[str], List[dict]]:
+    """Return (chunks, metadata) lists for the given PDF."""
     fname = os.path.basename(path).lower()
     product = (
         "coffee maker"
@@ -90,7 +92,7 @@ def pdf_to_chunks(path: str, chunk_tokens: int, overlap: int) -> Tuple[List[str]
             if para.strip():
                 paragraphs.append((para.strip(), pg_no))
 
-    def _flush(buffer, _tok_len):
+    def _flush(buffer):
         text = "\n\n".join(p for p, _ in buffer).strip()
         first_page = buffer[0][1]
         chunks.append(text)
@@ -107,7 +109,7 @@ def pdf_to_chunks(path: str, chunk_tokens: int, overlap: int) -> Tuple[List[str]
         if overlap_tokens == 0:
             return [], 0
         rev = list(reversed(buffer))
-        keep = []
+        keep: List[Tuple[str, int]] = []
         tokens = 0
         for para, pg in rev:
             t = token_len(para)
@@ -129,11 +131,11 @@ def pdf_to_chunks(path: str, chunk_tokens: int, overlap: int) -> Tuple[List[str]
             buf_tokens += t_para
             i += 1
         else:
-            _flush(buf, buf_tokens)
+            _flush(buf)
             buf, buf_tokens = _overlap_tail(buf, overlap)
 
     if buf:
-        _flush(buf, buf_tokens)
+        _flush(buf)
 
     return chunks, metas
 
@@ -153,18 +155,16 @@ if not ENV:
 pc = Pinecone(api_key=os.getenv("PINECONE_API_KEY"))
 
 
-def _parse_cloud_and_region(env_str: str):  # helper to support both aws‑us‑east‑1 & gcp‑us‑central1
+def _parse_cloud_and_region(env_str: str):
+    """Convert env string → (cloud, region) for ServerlessSpec."""
     parts = env_str.split("-")
-    cloud = CloudProvider.AWS if parts[0].lower() == "aws" else CloudProvider.GCP
-    if len(parts) >= 3:
-        region = "-".join(parts[-2:])  # e.g. us-east-1 or us-central1
-    else:
-        region = "us-east-1"  # sensible default
+    cloud = "aws" if parts[0].lower() == "aws" else "gcp"
+    region = "-".join(parts[-2:]) if len(parts) >= 3 else "us-east-1"
     return cloud, region
 
 
 def ensure_index(dim: int):
-    """Create Pinecone index if missing and sanity‑check its dimension."""
+    """Create Pinecone index if missing; check dimension otherwise."""
     cloud, region = _parse_cloud_and_region(ENV)
 
     if INDEX_NAME in pc.list_indexes().names():
@@ -244,27 +244,6 @@ def ingest(
 # ───── 7. CLI ─────
 
 if __name__ == "__main__":
-    ap = argparse.ArgumentParser(
-        description="Embed & upsert a PDF manual into Pinecone."
-    )
+    ap = argparse.ArgumentParser(description="Embed & upsert a PDF manual into Pinecone.")
     ap.add_argument("pdf", help="Path to the PDF")
-    ap.add_argument("--customer", default="demo01", help="Tenant name")
-    ap.add_argument(
-        "--chunk_tokens", type=int, default=800, help="Max tokens per chunk (default: 800)"
-    )
-    ap.add_argument(
-        "--overlap", type=int, default=150, help="Token overlap between chunks (default: 150)"
-    )
-    ap.add_argument("--dry", action="store_true", help="Preview chunks only")
-    args = ap.parse_args()
-
-    if not pathlib.Path(args.pdf).exists():
-        sys.exit(f"🟥  PDF not found: {args.pdf}")
-
-    ingest(
-        pdf_path=args.pdf,
-        customer=args.customer,
-        chunk_tokens=args.chunk_tokens,
-        overlap=args.overlap,
-        dry_run=args.dry,
-    )
+    ap.add

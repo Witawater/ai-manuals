@@ -18,7 +18,7 @@ from typing import Dict, List
 
 import dotenv
 from openai import OpenAI
-from pinecone import CloudProvider, Pinecone, ServerlessSpec
+from pinecone import Pinecone, ServerlessSpec  # v3 SDK – no CloudProvider enum
 
 # ───── 1. Secrets & clients ─────
 dotenv.load_dotenv(".env")
@@ -34,7 +34,7 @@ DIM = 3072 if "large" in EMBED_MODEL else 1536
 
 ENV = os.getenv("PINECONE_ENV", "")
 REGION = (ENV.split("-", 1)[-1] or "us-east1").lower()
-cloud = CloudProvider.AWS if "aws" in ENV else CloudProvider.GCP
+CLOUD = "aws" if "aws" in ENV.lower() else "gcp"  # plain string, not enum
 
 pc = Pinecone(api_key=os.getenv("PINECONE_API_KEY"), environment=ENV)
 client = OpenAI(api_key=os.getenv("OPENAI_API_KEY"))
@@ -46,7 +46,7 @@ if INDEX_NAME not in pc.list_indexes().names():
         name=INDEX_NAME,
         dimension=DIM,
         metric="cosine",
-        spec=ServerlessSpec(cloud=cloud, region=REGION),
+        spec=ServerlessSpec(cloud=CLOUD, region=REGION),
     )
     while not pc.describe_index(INDEX_NAME).status["ready"]:
         time.sleep(2)
@@ -62,7 +62,6 @@ else:
 idx = pc.Index(INDEX_NAME)
 
 # ───── 3. Q‑and‑A helper ─────
-
 def chat(
     question: str,
     customer: str = "demo01",
