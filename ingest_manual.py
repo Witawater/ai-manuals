@@ -35,8 +35,8 @@ from pinecone import ServerlessSpec, Pinecone
 # ─────────────── 1. CONFIG ───────────────
 load_dotenv(".env")
 
-INDEX_NAME: str = os.getenv("PINECONE_INDEX", "manuals-small")
-EMBED_MODEL: str = os.getenv("OPENAI_EMBED_MODEL", "text-embedding-3-small")
+INDEX_NAME: str = os.getenv("PINECONE_INDEX", "manuals-large")
+EMBED_MODEL: str = os.getenv("OPENAI_EMBED_MODEL", "text-embedding-3-large")
 DIMENSION: int = 3072 if "large" in EMBED_MODEL else 1536
 
 openai_client = OpenAI(api_key=os.environ["OPENAI_API_KEY"])

@@ -24,7 +24,7 @@ services:
     environment:
       POSTGRES_DB:     ${POSTGRES_DB:-aimanuals}
       POSTGRES_USER:   ${POSTGRES_USER:-aimanuals}
-      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-change-me}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-j1TDLI2xqf2BbxLuCQkHZZRc53wGW1zA}
     ports:
       - "5432:5432"     # expose only if you need local psql access
     volumes:
