@@ -25,9 +25,9 @@ dotenv.load_dotenv(".env")
 
 DEBUG = True
 
-EMBED_MODEL = os.getenv("OPENAI_EMBED_MODEL", "text-embedding-3-large")
+EMBED_MODEL = os.getenv("OPENAI_EMBED_MODEL", "text-embedding-3-small")
 CHAT_MODEL = os.getenv("OPENAI_CHAT_MODEL", "gpt-4o")
-INDEX_NAME = os.getenv("PINECONE_INDEX", "manuals-large")
+INDEX_NAME = os.getenv("PINECONE_INDEX", "manuals-small")
 
 # Determine embedding dimension from the model name (per OpenAI docs)
 DIM = 3072 if "large" in EMBED_MODEL else 1536
