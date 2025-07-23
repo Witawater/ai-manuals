@@ -4,106 +4,133 @@
   <meta charset="utf-8" />
   <title>AI‑Manuals demo</title>
   <style>
-    body   {font-family:sans-serif;max-width:680px;margin:auto;padding:20px}
+    body {font-family:sans-serif;max-width:680px;margin:auto;padding:20px}
     #answer{white-space:pre-wrap;border:1px solid #ccc;padding:12px;margin-top:12px}
-    .fb    {font-size:20px;margin:0 6px;cursor:pointer}
-    .hide  {display:none}
+    .fb {font-size:20px;margin:0 6px;cursor:pointer}
+    .hide{display:none}
     #status{margin-top:10px;font-size:14px;color:#555}
   </style>
-  <!-- hard‑coded key for demo, replace in prod -->
-  <meta name="api-key" content="d4d6aa9f2bf75faf76454d8621af7c01">
+  <!-- FIXME: inject your real API key value below or via build-step -->
+  <meta name="api-key" content="REPLACE_WITH_API_KEY">
 </head>
 <body>
-<h2>Manual helper</h2>
+  <h2>Manual helper</h2>
 
-<h4>Upload a PDF</h4>
-<input type="file" id="pdf" />
-<button onclick="upload()">Upload</button>
-<div id="status"></div>
+  <h4>Upload a PDF</h4>
+  <input type="file" id="pdf" />
+  <button onclick="upload()">Upload</button>
+  <div id="status"></div>
 
-<h4>Ask a question</h4>
-<input id="q" size="60" placeholder="Type your question…" disabled />
-<button onclick="ask()" id="askBtn" disabled>Ask</button><br /><br />
+  <h4>Ask a question</h4>
+  <input id="q" size="60" placeholder="Type your question…" disabled />
+  <button onclick="ask()" id="askBtn" disabled>Ask</button><br><br>
 
-<div id="answer"></div>
+  <div id="answer"></div>
 
-<!-- feedback bar -->
-<div id="fb" class="hide">
-  <span class="fb" onclick="sendFeedback( 1)">👍</span>
-  <span class="fb" onclick="sendFeedback(-1)">👎</span>
-</div>
-
-<p>
-  <a href="/dashboard.html" target="_blank">📊 Feedback dashboard</a>
-</p>
+  <!-- feedback bar (unchanged) -->
+  <div id="fb" class="hide">
+    <span class="fb" onclick="sendFeedback(1)">👍</span>
+    <span class="fb" onclick="sendFeedback(-1)">👎</span>
+  </div>
 
 <script>
-const pdf       = document.getElementById("pdf");        // ← add
-const q         = document.getElementById("question");   // ← add
-const askBtn    = document.getElementById("askBtn");     // ← add
-const statusEl  = document.getElementById("status");     // ← add
-const answerEl  = document.getElementById("answer");     // ← add
+// ──────────────────────────────────────────────────────────
+// DOM refs
+const pdf      = document.getElementById('pdf');
+const q        = document.getElementById('q');
+const askBtn   = document.getElementById('askBtn');
+const statusEl = document.getElementById('status');
+const answerEl = document.getElementById('answer');
 
+// API key → headers
 const API_KEY = document.querySelector('meta[name="api-key"]').content || "";
-const headers = extra => ({ "X-API-Key": API_KEY, ...extra });
+const headers = extra => ({ 'X-API-Key': API_KEY, ...extra });
+
 let DOC_ID = "", pollTimer;
 
+// start ingest immediately after file pick OR via Upload btn
 pdf.onchange = () => upload();
 
 async function upload(){
   const file = pdf.files[0];
-  if(!file) return;
-  statusEl.textContent = "Uploading…";
+  if(!file){ alert('Pick a PDF first'); return; }
+
+  statusEl.textContent = 'Uploading…';
   q.disabled = askBtn.disabled = true;
 
-  const fd = new FormData(); fd.append("file", file);
-  const res = await fetch("/upload", {method:"POST", headers: headers(), body: fd}).then(r=>r.json());
+  try {
+    const fd = new FormData(); fd.append('file', file);
+    const res = await fetch('/upload', { method:'POST', headers: headers(), body: fd });
+    if(!res.ok) throw new Error(`${res.status} ${res.statusText}`);
+    const js = await res.json();
 
-  DOC_ID = res.doc_id;
-  statusEl.textContent = "Processing PDF… fill the form meanwhile.";
-  showMetaForm();
-  pollTimer = setInterval(checkReady, 2000);
+    DOC_ID = js.doc_id;
+    statusEl.textContent = 'Processing PDF… fill the form meanwhile.';
+    showMetaForm();
+    pollTimer = setInterval(checkReady, 2000);
+  } catch(err){
+    statusEl.textContent = '❌ Upload failed.';
+    alert('Upload failed: '+ err);
+  }
 }
 
 async function checkReady(){
-  const job = await fetch(`/ingest/status?doc_id=${DOC_ID}`, {headers: headers()}).then(r=>r.json());
-  statusEl.textContent = `Embedded ${job.done}/${job.total} chunks…`;
+  try{
+    const res = await fetch(`/ingest/status?doc_id=${DOC_ID}`, { headers: headers() });
+    if(!res.ok) throw new Error(`${res.status} ${res.statusText}`);
+    const job = await res.json();
 
-  if(job.ready){
+    statusEl.textContent = `Embedded ${job.done}/${job.total} chunks…`;
+    if(job.ready){
+      clearInterval(pollTimer);
+      statusEl.textContent = '✅ Ready – ask away!';
+      q.disabled = askBtn.disabled = false;
+    }
+  }catch(err){
     clearInterval(pollTimer);
-    statusEl.textContent = "✅ Ready – ask away!";
-    q.disabled = askBtn.disabled = false;
+    statusEl.textContent = '❌ Status check failed.';
+    alert('Status check failed: '+ err);
   }
 }
 
 function showMetaForm(){
-  const html = `
-    <hr><b>What type of manual?</b><br>
-    <label><input type=radio name=dt value=software checked> Software</label>
-    <label><input type=radio name=dt value=hardware> Physical product</label>
-    <label><input type=radio name=dt value=service> Service</label><br>
-    Notes: <input id=notes size=40 placeholder="e.g. 3-axis CNC mill">
-    <button onclick="saveMeta()">Save</button><div id="metaStatus"></div>`;
-  statusEl.insertAdjacentHTML("afterend", html);
+  const html = `\n    <hr><b>What type of manual?</b><br>\n    <label><input type=radio name=dt value=software checked> Software</label>\n    <label><input type=radio name=dt value=hardware> Physical product</label>\n    <label><input type=radio name=dt value=service> Service</label><br>\n    Notes: <input id=notes size=40 placeholder="e.g. 3-axis CNC mill">\n    <button onclick=\"saveMeta()\">Save</button><div id="metaStatus"></div>`;
+  statusEl.insertAdjacentHTML('afterend', html);
 }
 
 async function saveMeta(){
-  const doc_type = document.querySelector("input[name=dt]:checked").value;
-  const notes = document.getElementById("notes").value;
-  const fd = new FormData(); fd.append("doc_id", DOC_ID); fd.append("doc_type", doc_type); fd.append("notes", notes);
+  const doc_type = document.querySelector('input[name=dt]:checked').value;
+  const notes = document.getElementById('notes').value;
+  const fd = new FormData();
+  fd.append('doc_id', DOC_ID);
+  fd.append('doc_type', doc_type);
+  fd.append('notes', notes);
 
-  await fetch("/upload/metadata", {method:"POST", headers: headers(), body: fd});
-  document.getElementById("metaStatus").textContent = "✔️ saved";
+  try{
+    const res = await fetch('/upload/metadata', { method:'POST', headers: headers(), body: fd });
+    if(!res.ok) throw new Error(`${res.status} ${res.statusText}`);
+    document.getElementById('metaStatus').textContent = '✔️ saved';
+  }catch(err){
+    alert('Metadata save failed: '+ err);
+  }
 }
 
 async function ask(){
   if(!q.value.trim()) return;
-  askBtn.disabled = true; answerEl.textContent = "Thinking…";
-  const fd = new FormData(); fd.append("question", q.value);
+  askBtn.disabled = true; answerEl.textContent = 'Thinking…';
 
-  const js = await fetch("/chat", {method:"POST", headers: headers(), body: fd}).then(r=>r.json());
-  answerEl.textContent = js.answer;
-  askBtn.disabled = false;
+  const fd = new FormData(); fd.append('question', q.value);
+  try{
+    const res = await fetch('/chat', { method:'POST', headers: headers(), body: fd });
+    if(!res.ok) throw new Error(`${res.status} ${res.statusText}`);
+    const js = await res.json();
+    answerEl.textContent = js.answer;
+  }catch(err){
+    answerEl.textContent = '❌ Request failed.';
+    alert('Question failed: '+ err);
+  }finally{
+    askBtn.disabled = false;
+  }
 }
 </script>
 </body>
