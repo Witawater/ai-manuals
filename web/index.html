@@ -47,14 +47,16 @@ const API_KEY = document.querySelector('meta[name="api-key"]').content || "";
 const headers = extra => ({ 'X-API-Key': API_KEY, ...extra });
 
 let DOC_ID = "", pollTimer;
+let uploading = false;                // NEW guard against duplicates
 
-// start ingest immediately after file pick OR via Upload btn
-pdf.onchange = () => upload();
+// ─── Upload + ingest ───────────────────────────────────────
 
 async function upload(){
+  if(uploading) return;               // NEW: ignore extra clicks
   const file = pdf.files[0];
   if(!file){ alert('Pick a PDF first'); return; }
 
+  uploading = true;                   // NEW
   statusEl.textContent = 'Uploading…';
   q.disabled = askBtn.disabled = true;
 
@@ -66,9 +68,10 @@ async function upload(){
 
     DOC_ID = js.doc_id;
     statusEl.textContent = 'Processing PDF… fill the form meanwhile.';
-    showMetaForm();
+    showMetaForm();                   // inserts only once now
     pollTimer = setInterval(checkReady, 2000);
   } catch(err){
+    uploading = false;                // NEW
     statusEl.textContent = '❌ Upload failed.';
     alert('Upload failed: '+ err);
   }
@@ -83,18 +86,30 @@ async function checkReady(){
     statusEl.textContent = `Embedded ${job.done}/${job.total} chunks…`;
     if(job.ready){
       clearInterval(pollTimer);
+      uploading = false;             // NEW: allow new uploads after done
       statusEl.textContent = '✅ Ready – ask away!';
       q.disabled = askBtn.disabled = false;
     }
   }catch(err){
     clearInterval(pollTimer);
+    uploading = false;               // NEW
     statusEl.textContent = '❌ Status check failed.';
     alert('Status check failed: '+ err);
   }
 }
 
+// ─── Metadata form (one-shot) ──────────────────────────────
 function showMetaForm(){
-  const html = `\n    <hr><b>What type of manual?</b><br>\n    <label><input type=radio name=dt value=software checked> Software</label>\n    <label><input type=radio name=dt value=hardware> Physical product</label>\n    <label><input type=radio name=dt value=service> Service</label><br>\n    Notes: <input id=notes size=40 placeholder="e.g. 3-axis CNC mill">\n    <button onclick=\"saveMeta()\">Save</button><div id="metaStatus"></div>`;
+  if(document.getElementById('metaForm')) return;   // NEW: already shown
+  const html = `
+    <div id="metaForm">
+      <hr><b>What type of manual?</b><br>
+      <label><input type=radio name=dt value=software checked> Software</label>
+      <label><input type=radio name=dt value=hardware> Physical product</label>
+      <label><input type=radio name=dt value=service> Service</label><br>
+      Notes: <input id=notes size=40 placeholder="e.g. 3-axis CNC mill">
+      <button onclick="saveMeta()">Save</button> <span id="metaStatus"></span>
+    </div>`;
   statusEl.insertAdjacentHTML('afterend', html);
 }
 
@@ -115,6 +130,7 @@ async function saveMeta(){
   }
 }
 
+// ─── Ask ───────────────────────────────────────────────────
 async function ask(){
   if(!q.value.trim()) return;
   askBtn.disabled = true; answerEl.textContent = 'Thinking…';
