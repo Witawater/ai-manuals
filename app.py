@@ -2,7 +2,9 @@
 """
 FastAPI service for AI‑Manuals
 ──────────────────────────────
-• POST /upload            – add a PDF to Pinecone
+• POST /upload            – add a PDF to Pinecone (returns doc_id)
+• GET  /ingest/status     – progress & ready flag while ingest runs
+• POST /upload/metadata   – store user‑supplied doc_type / notes
 • POST /chat              – ask a question → {"answer", "chunks_used"}
 • POST /feedback          – thumbs‑up / thumbs‑down (+ chunk IDs)
 • GET  /feedback/summary  – daily 👍 / 👎 counts
@@ -16,7 +18,7 @@ import json
 import os
 import tempfile
 import uuid
-from typing import Dict, List, Optional
+from typing import Any, Dict, List, Optional
 
 from fastapi import (
     BackgroundTasks,
@@ -33,7 +35,7 @@ from pydantic import BaseModel
 from sqlalchemy import text
 
 # ─── local modules ────────────────────────────────────────────
-from ingest_manual import ingest
+from ingest_manual import ingest, pdf_to_chunks  # pdf_to_chunks used for quick size estimate
 from qa_demo import chat
 from auth import require_api_key
 from db import engine
@@ -41,6 +43,9 @@ from db import engine
 # ─── tunables (env‑vars) ──────────────────────────────────────
 CHUNK_TOKENS: int = int(os.getenv("CHUNK_TOKENS", "800"))
 OVERLAP: int = int(os.getenv("OVERLAP", "150"))
+
+# ─── job table to track ingest progress ───────────────────────
+JOBS: Dict[str, Dict[str, Any]] = {}
 
 # ─── FastAPI & CORS ───────────────────────────────────────────
 app = FastAPI()
@@ -57,15 +62,29 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
+# ╭────────────────────────── 1)  PDF upload & ingest ─────────╮
 
-# ╭────────────────────────── 1)  PDF upload ─────────────────╮
+def _ingest_and_cleanup(path: str, customer: str, doc_id: str) -> None:
+    """Worker runs in the background: ingest PDF, update progress, delete tmp."""
 
-def _ingest_and_cleanup(path: str, customer: str) -> None:
-    """Runs in background: ingest PDF then delete temp file."""
+    def _progress(done: int):
+        job = JOBS.get(doc_id)
+        if job:
+            job["done"] = done
+
     try:
-        ingest(path, customer, CHUNK_TOKENS, OVERLAP, dry_run=False)
+        ingest(
+            path,
+            customer,
+            CHUNK_TOKENS,
+            OVERLAP,
+            dry_run=False,
+            progress_cb=_progress,  # <── requires progress_cb arg in ingest()
+        )
+        JOBS[doc_id]["ready"] = True
         print(f"✅ Ingest complete: {path}")
     except Exception as exc:
+        JOBS.setdefault(doc_id, {}).update({"error": str(exc)})
         print(f"🛑 Ingest failed: {exc}")
     finally:
         try:
@@ -80,19 +99,46 @@ async def upload_pdf(
     file: UploadFile = File(...),
     customer: str = Form("demo01"),
 ):
-    print(f"📥 Upload received: {file.filename} from {customer}")
+    """Receive PDF, queue ingest, return doc_id so UI can poll progress."""
+    doc_id = uuid.uuid4().hex
+    print(f"📥 Upload received: {file.filename} from {customer} (doc_id={doc_id})")
 
-    tmp_dir = tempfile.gettempdir()
-    tmp_name = f"{uuid.uuid4().hex}_{file.filename}"
-    tmp_path = os.path.join(tmp_dir, tmp_name)
-
+    tmp_path = os.path.join(tempfile.gettempdir(), f"{doc_id}_{file.filename}")
     with open(tmp_path, "wb") as handle:
         handle.write(await file.read())
 
-    background_tasks.add_task(_ingest_and_cleanup, tmp_path, customer)
+    # Quick chunk length estimate for progress bar
+    try:
+        chunks, _ = pdf_to_chunks(tmp_path, CHUNK_TOKENS, OVERLAP)
+        total_chunks = len(chunks)
+    except Exception:
+        total_chunks = 0  # fallback if pre‑parse fails
 
-    return {"status": "queued", "file": file.filename}
+    # Initialise job record
+    JOBS[doc_id] = {"ready": False, "total": total_chunks, "done": 0, "meta": {}}
 
+    background_tasks.add_task(_ingest_and_cleanup, tmp_path, customer, doc_id)
+
+    return {"doc_id": doc_id, "status": "queued", "file": file.filename}
+
+
+@app.get("/ingest/status", dependencies=[Depends(require_api_key)])
+def ingest_status(doc_id: str):
+    job = JOBS.get(doc_id)
+    if not job:
+        raise HTTPException(status_code=404, detail="doc_id not found")
+    return job
+
+
+@app.post("/upload/metadata", dependencies=[Depends(require_api_key)])
+def add_metadata(
+    doc_id: str = Form(...),
+    doc_type: str = Form(...),
+    notes: str = Form(""),
+):
+    job = JOBS.setdefault(doc_id, {"meta": {}})
+    job["meta"] = {"doc_type": doc_type, "notes": notes[:200]}
+    return {"ok": True}
 
 # ╰────────────────────────────────────────────────────────────╯
 

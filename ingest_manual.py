@@ -2,18 +2,9 @@
 """
 ingest_manual.py – Chunk → Embed → Upsert ONE PDF into Pinecone
 ────────────────────────────────────────────────────────────────
-Usage:
-    python ingest_manual.py CoffeeMaker.pdf \
-        --customer demo01 \
-        --chunk_tokens 800 \
-        --overlap 150
-
-Key points
-──────────
-• Reads OPENAI + Pinecone keys from .env.
-• Embedding dimension inferred from `OPENAI_EMBED_MODEL`.
-• Robustly parses PINECONE_ENV (e.g. aws-us-east-1, gcp-us-central1).
-• Auto‑creates the index if missing and validates its dimension.
+Adds **progress callback** & **common metadata** support so the
+front‑end can display real‑time ingest status and attach user‑supplied
+doc_type/notes to every vector.
 """
 
 from __future__ import annotations
@@ -24,7 +15,7 @@ import pathlib
 import sys
 import time
 import uuid
-from typing import List, Tuple
+from typing import List, Tuple, Callable, Dict, Any
 
 import pdfplumber
 import tiktoken
@@ -45,12 +36,12 @@ enc = tiktoken.get_encoding("cl100k_base")
 # ─────────────── 2. HELPERS ───────────────
 
 def token_len(txt: str) -> int:
-    """Return token length (tiktoken count) instead of characters."""
+    """Return tiktoken token length."""
     return len(enc.encode(txt))
 
 
 def retry(fn, *a, **kw):
-    """Simple exponential‑backoff retry for OpenAI RateLimitError."""
+    """Exponential‑backoff retry wrapper for OpenAI RateLimitError."""
     for attempt in range(5):
         try:
             return fn(*a, **kw)
@@ -198,10 +189,20 @@ def ingest(
     dry_run: bool,
     batch_embed: int = 100,
     batch_upsert: int = 100,
+    *,
+    progress_cb: Callable[[int], None] | None = None,
+    common_meta: Dict[str, Any] | None = None,
 ):
+    """Chunk → embed → upsert with optional progress callback.
+
+    progress_cb(n_done) will be called after each upsert batch so the
+    API can report ingestion progress. common_meta is merged into every
+    Pinecone vector's metadata (e.g. {"doc_type": "software"}).
+    """
     print("📖  Chunking PDF …")
     chunks, metas = pdf_to_chunks(pdf_path, chunk_tokens, overlap)
-    print(f"   → {len(chunks)} chunks")
+    total = len(chunks)
+    print(f"   → {total} chunks")
 
     if dry_run:
         for i, (ch, meta) in enumerate(zip(chunks, metas)):
@@ -211,19 +212,24 @@ def ingest(
     ensure_index(DIMENSION)
     index = pc.Index(INDEX_NAME)
 
-    print("🔢  Embedding …")
+    # 4.a Embedding
     vectors: List[List[float]] = []
-    for i in range(0, len(chunks), batch_embed):
-        vectors.extend(embed_texts(chunks[i : i + batch_embed]))
-        print(f"   • embedded {min(i + batch_embed, len(chunks))}/{len(chunks)}")
+    print("🔢  Embedding …")
+    for i in range(0, total, batch_embed):
+        batch = chunks[i : i + batch_embed]
+        vectors.extend(embed_texts(batch))
+        print(f"   • embedded {min(i + batch_embed, total)}/{total}")
 
+    # 4.b Upsert
     print("🚚  Upserting …")
+    final_common_meta = common_meta or {}
     items = [
         (
             f"{customer}-{uuid.uuid4().hex[:8]}",
             vec,
             {
                 **meta,
+                **final_common_meta,
                 "customer": customer,
                 "chunk": i,
                 "text": chunks[i],
@@ -236,9 +242,13 @@ def ingest(
 
     for j in range(0, len(items), batch_upsert):
         index.upsert(items[j : j + batch_upsert])
+        if progress_cb:
+            progress_cb(min(j + batch_upsert, len(items)))
         print(f"   • upserted {min(j + batch_upsert, len(items))}/{len(items)}")
 
-    print(f"✅  Ingested {len(chunks)} chunks into '{INDEX_NAME}'.")
+    if progress_cb:
+        progress_cb(len(items))
+    print(f"✅  Ingested {total} chunks into '{INDEX_NAME}'.")
 
 
 # ───── 7. CLI ─────
@@ -246,4 +256,20 @@ def ingest(
 if __name__ == "__main__":
     ap = argparse.ArgumentParser(description="Embed & upsert a PDF manual into Pinecone.")
     ap.add_argument("pdf", help="Path to the PDF")
-    ap.add
+    ap.add_argument("--customer", default="demo01")
+    ap.add_argument("--chunk_tokens", type=int, default=800)
+    ap.add_argument("--overlap", type=int, default=150)
+    ap.add_argument("--dry_run", action="store_true")
+    ap.add_argument("--batch_embed", type=int, default=100)
+    ap.add_argument("--batch_upsert", type=int, default=100)
+    args = ap.parse_args()
+
+    ingest(
+        args.pdf,
+        args.customer,
+        args.chunk_tokens,
+        args.overlap,
+        args.dry_run,
+        batch_embed=args.batch_embed,
+        batch_upsert=args.batch_upsert,
+    )
