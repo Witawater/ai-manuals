@@ -2,7 +2,8 @@
 """
 qa_demo.py – Ask questions against the Pinecone index
 ──────────────────────────────────────────────────────
-Now supports a *doc_type* boost instead of a hard filter.
+Adds Max-Marginal-Relevance (MMR) so GPT sees diverse chunks instead
+of near-duplicates, and keeps the doc_type boost.
 """
 
 from __future__ import annotations
@@ -12,7 +13,8 @@ from typing import Dict, List, Tuple
 
 import dotenv
 from openai import OpenAI
-from pinecone import Pinecone, ServerlessSpec          # v3 SDK
+from pinecone import Pinecone, ServerlessSpec      # v3 SDK
+from sklearn.metrics.pairwise import cosine_similarity  # ← NEW
 
 # ───── 1. Secrets & clients ─────
 dotenv.load_dotenv(".env")
@@ -23,22 +25,21 @@ CHAT_MODEL  = os.getenv("OPENAI_CHAT_MODEL",  "gpt-4o")
 INDEX_NAME  = os.getenv("PINECONE_INDEX",     "manuals-small")
 
 DIM = 3072 if "large" in EMBED_MODEL else 1536
-
-ENV    = os.getenv("PINECONE_ENV", "")
+ENV = os.getenv("PINECONE_ENV", "")
 REGION = (ENV.split("-", 1)[-1] or "us-east1").lower()
 CLOUD  = "aws" if "aws" in ENV.lower() else "gcp"
 
-pc      = Pinecone(api_key=os.getenv("PINECONE_API_KEY"), environment=ENV)
-openai  = OpenAI(api_key=os.getenv("OPENAI_API_KEY"))
+pc     = Pinecone(api_key=os.getenv("PINECONE_API_KEY"), environment=ENV)
+openai = OpenAI(api_key=os.getenv("OPENAI_API_KEY"))
 
 # ───── 2. Ensure index exists ─────
 if INDEX_NAME not in pc.list_indexes().names():
     print(f"ℹ️  '{INDEX_NAME}' missing – creating …")
     pc.create_index(
-        name       = INDEX_NAME,
-        dimension  = DIM,
-        metric     = "cosine",
-        spec       = ServerlessSpec(cloud=CLOUD, region=REGION),
+        name      = INDEX_NAME,
+        dimension = DIM,
+        metric    = "cosine",
+        spec      = ServerlessSpec(cloud=CLOUD, region=REGION),
     )
     while not pc.describe_index(INDEX_NAME).status["ready"]:
         time.sleep(2)
@@ -52,83 +53,100 @@ else:
 
 idx = pc.Index(INDEX_NAME)
 
-# ───── 3. Q-and-A helper ─────
+# ───── 3. Helpers ─────
 def _embed(txt: str) -> List[float]:
     return openai.embeddings.create(model=EMBED_MODEL, input=txt).data[0].embedding
 
 
-def chat(
-    question:   str,
-    customer:   str = "demo01",
-    doc_type:   str = "",                 # ← boost signal from UI
-    top_k:      int = 40,                 # more recall, we'll down-select later
-    concise:    bool = False,
-    fallback:   bool = True,
-    rerank_keep:int  = 8,
-    fallback_cut:float = 0.35,            # rolled back to original
-) -> Dict[str, object]:
-    """Return answer dict: {answer, chunks_used, grounded, confidence}"""
+def mmr(matches, *, k: int = 20, lam: float = 0.5):
+    """Max-Marginal-Relevance selection on Pinecone matches."""
+    if k >= len(matches):
+        return matches
 
-    # 3-1) Initial dense retrieval
+    vecs = [m.values for m in matches]
+    sim_mat   = cosine_similarity(vecs, vecs)
+    query_sim = [m.score for m in matches]
+
+    selected, rest = [], list(range(len(matches)))
+    # first pick = most similar to query
+    selected.append(rest.pop(0))
+
+    while len(selected) < k and rest:
+        cur_sims = sim_mat[:, selected].max(axis=1)
+        mmr_scores = [
+            lam * query_sim[i] - (1 - lam) * cur_sims[i] for i in rest
+        ]
+        idx = rest.pop(mmr_scores.index(max(mmr_scores)))
+        selected.append(idx)
+
+    return [matches[i] for i in selected]
+
+# ───── 4. Main chat routine ─────
+def chat(
+    question:    str,
+    customer:    str = "demo01",
+    doc_type:    str = "",
+    top_k:       int = 40,
+    concise:     bool = False,
+    fallback:    bool = True,
+    rerank_keep: int  = 8,
+    fallback_cut:float = 0.35,
+) -> Dict[str, object]:
+    """Return dict {answer, chunks_used, grounded, confidence}"""
+
+    # 4-1) Dense retrieval
     q_vec = _embed(question)
     res   = idx.query(
-        vector            = q_vec,
-        top_k             = top_k,
-        filter            = {"customer": {"$eq": customer}},   # tenant isolation only
-        include_metadata  = True,
+        vector           = q_vec,
+        top_k            = top_k,
+        filter           = {"customer": {"$eq": customer}},
+        include_metadata = True,
+        include_values   = True,          # ← need vectors for MMR
     )
 
     if not res.matches:
-        return {
-            "answer": "Nothing found in the manual.",
-            "chunks_used": [],
-            "grounded": False,
-            "confidence": 0.0,
-        }
+        return {"answer":"Nothing found in the manual.",
+                "chunks_used":[], "grounded":False, "confidence":0.0}
 
-    # 3-2) Score-boost matching doc_type instead of filtering it out
+    # 4-2) MMR diversity BEFORE boosting
+    res.matches = mmr(res.matches, k=20, lam=0.5)
+
+    # 4-3) Soft doc_type boost
     boosted: List[Tuple[float, object]] = []
     for m in res.matches:
-        score = m.score
-        if doc_type and m.metadata.get("doc_type") == doc_type:
-            score += 0.10                       # 10-point boost
+        score = m.score + (0.10 if doc_type and m.metadata.get("doc_type")==doc_type else 0)
         boosted.append((score, m))
     boosted.sort(key=lambda t: t[0], reverse=True)
     res.matches = [m for _, m in boosted]
 
     if DEBUG:
-        print(f"\nℹ️ Retrieved {len(res.matches)} chunks (top 6 shown):")
+        print(f"\nℹ️ After MMR {len(res.matches)} chunks (first 6):")
         for i, m in enumerate(res.matches[:6]):
-            snippet = m.metadata.get("text", "")[:100].replace("\n", " ")
-            print(f"  [{i}] score={m.score:.4f} → {snippet}…")
+            print(f"  [{i}] score={m.score:.4f} → {m.metadata.get('text','')[:100].replace(chr(10),' ')}…")
 
-    # 3-3) Fallback gate
+    # 4-4) Fallback gate
     have_docs = res.matches and (
         sum(m.score for m in res.matches[:2]) / max(1, len(res.matches[:2]))
     ) > fallback_cut
 
-    if not have_docs and not fallback:
-        return {"answer": "I couldn't find anything in the manual.",
-                "chunks_used": [], "grounded": True, "confidence": 0.0}
-
     if not have_docs:
+        if not fallback:
+            return {"answer":"I couldn't find anything in the manual.",
+                    "chunks_used":[], "grounded":True, "confidence":0.0}
         sys_prompt = (
             "You are a helpful assistant. The manual doesn't answer this. "
             "If general knowledge helps, answer clearly; otherwise say so."
         )
         gpt_ans = openai.chat.completions.create(
             model=CHAT_MODEL,
-            messages=[
-                {"role": "system", "content": sys_prompt},
-                {"role": "user",   "content": question},
-            ],
+            messages=[{"role":"system","content":sys_prompt},
+                      {"role":"user","content":question}],
             temperature=0.3,
         ).choices[0].message.content.strip()
+        return {"answer":"(General guidance – not in manual) "+gpt_ans,
+                "chunks_used":[], "grounded":False, "confidence":0.4}
 
-        return {"answer": "(General guidance – not in manual) " + gpt_ans,
-                "chunks_used": [], "grounded": False, "confidence": 0.4}
-
-    # 3-4) Rerank (LLM) – keep diversity
+    # 4-5) LLM rerank
     rerank_prompt = (
         "Select the most relevant chunks for answering.\n\nQUESTION:\n"
         f"{question}\n\nCHUNKS:\n" +
@@ -145,6 +163,7 @@ def chat(
         keep = {int(x) for x in re.split(r"[,\s]+", best_ids) if x.strip().isdigit()}
     except Exception:
         keep = set()
+
     selected = [m for i, m in enumerate(res.matches) if i in keep][:rerank_keep]
     if not selected:
         selected = res.matches[:rerank_keep]
@@ -152,7 +171,7 @@ def chat(
     if DEBUG:
         print("ℹ️ Rerank kept:", [res.matches.index(m) for m in selected])
 
-    # 3-5) Build GPT context
+    # 4-6) Build GPT context
     context = "\n\n".join(
         f"[{i+1}] {m.metadata.get('text','')[:1500].strip()}" for i, m in enumerate(selected)
     )
@@ -160,37 +179,33 @@ def chat(
     sys_prompt = (
         "You are a technical assistant who must answer **only** with information "
         "found in the provided manual chunks. Cite each claim like [1]. "
-        "Say 'Not found' if the manual doesn't cover it."
+        "Do not omit relevant steps. Say 'Not found' if the manual doesn't cover it."
     )
     user_prompt = (
         f"{context}\n\n► QUESTION: {question}\n\n" +
         ("Answer in 2–4 sentences and cite sources."
-         if concise else "Write a precise answer with citations.")
+         if concise else "Write a precise, complete answer with citations.")
     )
 
     answer = openai.chat.completions.create(
         model=CHAT_MODEL,
-        messages=[
-            {"role":"system","content":sys_prompt},
-            {"role":"user",  "content":user_prompt},
-        ],
+        messages=[{"role":"system","content":sys_prompt},
+                  {"role":"user",  "content":user_prompt}],
         temperature=0,
     ).choices[0].message.content.strip()
 
     return {
-        "answer":       answer,
-        "chunks_used":  [m.id for m in selected],
-        "grounded":     True,
-        "confidence":   min(max(selected[0].score, 0.0), 1.0),
+        "answer":      answer,
+        "chunks_used": [m.id for m in selected],
+        "grounded":    True,
+        "confidence":  min(max(selected[0].score, 0.0), 1.0),
     }
 
-# ───── 4. Smoke test ─────
+# ───── 5. Smoke test ─────
 if __name__ == "__main__":
-    for q in [
-        "How do I drain the system?",
-        "Does it support Modbus?",
-        "What is 2 + 2?",
-    ]:
+    for q in ["How do I drain the system?",
+              "Does it support Modbus?",
+              "What is 2 + 2?"]:
         print(f"\nQ: {q}")
         out = chat(q, customer="demo01", doc_type="hardware", concise=True)
         print("Answer:", out["answer"])
