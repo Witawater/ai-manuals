@@ -89,7 +89,7 @@ def chat(
     top_k:       int = 40,
     concise:     bool = False,
     fallback:    bool = True,
-    rerank_keep: int  = 8,
+    rerank_keep: int  = 12,
     fallback_cut:float = 0.35,
 ) -> Dict[str, object]:
     """Return dict {answer, chunks_used, grounded, confidence}"""
