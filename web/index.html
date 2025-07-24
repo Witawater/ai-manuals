@@ -2,7 +2,7 @@
 <html lang="en">
 <head>
   <meta charset="utf-8" />
-  <title>AI‑Manuals demo</title>
+  <title>AI-Manuals demo</title>
   <style>
     body {font-family:sans-serif;max-width:680px;margin:auto;padding:20px}
     #answer{white-space:pre-wrap;border:1px solid #ccc;padding:12px;margin-top:12px}
@@ -47,16 +47,16 @@ const API_KEY = document.querySelector('meta[name="api-key"]').content || "";
 const headers = extra => ({ 'X-API-Key': API_KEY, ...extra });
 
 let DOC_ID = "", pollTimer;
-let uploading = false;                // NEW guard against duplicates
+let uploading = false;         // guard against duplicate uploads
+let USER_DOC_TYPE = "";        // << will travel with each question
 
 // ─── Upload + ingest ───────────────────────────────────────
-
 async function upload(){
-  if(uploading) return;               // NEW: ignore extra clicks
+  if(uploading) return;
   const file = pdf.files[0];
   if(!file){ alert('Pick a PDF first'); return; }
 
-  uploading = true;                   // NEW
+  uploading = true;
   statusEl.textContent = 'Uploading…';
   q.disabled = askBtn.disabled = true;
 
@@ -68,10 +68,10 @@ async function upload(){
 
     DOC_ID = js.doc_id;
     statusEl.textContent = 'Processing PDF… fill the form meanwhile.';
-    showMetaForm();                   // inserts only once now
+    showMetaForm();
     pollTimer = setInterval(checkReady, 2000);
   } catch(err){
-    uploading = false;                // NEW
+    uploading = false;
     statusEl.textContent = '❌ Upload failed.';
     alert('Upload failed: '+ err);
   }
@@ -86,21 +86,21 @@ async function checkReady(){
     statusEl.textContent = `Embedded ${job.done}/${job.total} chunks…`;
     if(job.ready){
       clearInterval(pollTimer);
-      uploading = false;             // NEW: allow new uploads after done
+      uploading = false;
       statusEl.textContent = '✅ Ready – ask away!';
       q.disabled = askBtn.disabled = false;
     }
   }catch(err){
     clearInterval(pollTimer);
-    uploading = false;               // NEW
+    uploading = false;
     statusEl.textContent = '❌ Status check failed.';
     alert('Status check failed: '+ err);
   }
 }
 
-// ─── Metadata form (one-shot) ──────────────────────────────
+// ─── Metadata form (one-shot) ─────────────────────────────
 function showMetaForm(){
-  if(document.getElementById('metaForm')) return;   // NEW: already shown
+  if(document.getElementById('metaForm')) return;   // already shown
   const html = `
     <div id="metaForm">
       <hr><b>What type of manual?</b><br>
@@ -116,6 +116,8 @@ function showMetaForm(){
 async function saveMeta(){
   const doc_type = document.querySelector('input[name=dt]:checked').value;
   const notes = document.getElementById('notes').value;
+  USER_DOC_TYPE = doc_type;                          // << capture selection
+
   const fd = new FormData();
   fd.append('doc_id', DOC_ID);
   fd.append('doc_type', doc_type);
@@ -135,7 +137,10 @@ async function ask(){
   if(!q.value.trim()) return;
   askBtn.disabled = true; answerEl.textContent = 'Thinking…';
 
-  const fd = new FormData(); fd.append('question', q.value);
+  const fd = new FormData();
+  fd.append('question', q.value);
+  fd.append('doc_type', USER_DOC_TYPE);              // << pass downstream
+
   try{
     const res = await fetch('/chat', { method:'POST', headers: headers(), body: fd });
     if(!res.ok) throw new Error(`${res.status} ${res.statusText}`);
