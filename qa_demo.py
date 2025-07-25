@@ -134,8 +134,14 @@ def chat(
             return {"answer":"I couldn't find anything in the manual.",
                     "chunks_used":[], "grounded":True, "confidence":0.0}
         sys_prompt = (
-            "You are a helpful assistant. The manual doesn't answer this. "
-            "If general knowledge helps, answer clearly; otherwise say so."
+    "You are a technical assistant answering **only** from the manual excerpts "
+    "below. Follow these rules:\n"
+    "• Include **all numbered steps verbatim**, key sequences, warnings, and any "
+    "display confirmations.\n"
+    "• Do not summarise away instructions; if the manual lists seven steps, "
+    "your answer must list seven.\n"
+    "• After each fact, cite the source like [2].\n"
+    "• If the excerpts don’t answer, reply “Not found in manual.”"
         )
         gpt_ans = openai.chat.completions.create(
             model=CHAT_MODEL,
@@ -157,6 +163,7 @@ def chat(
         model=CHAT_MODEL,
         messages=[{"role":"user","content":rerank_prompt}],
         temperature=0,
+        max_tokens  = 450,
     ).choices[0].message.content.strip()
 
     try:
