@@ -75,8 +75,10 @@ def pdf_to_chunks(
     metas: List[dict] = []
 
     with pdfplumber.open(path) as pdf:
-    all_pages = [p.extract_text(layout=True) or ""   # ← add layout=True
-                 for p in pdf.pages]
+        all_pages = [
+            p.extract_text(layout=True) or ""      # layout-aware extraction
+            for p in pdf.pages
+        ]
 
     paragraphs: List[Tuple[str, int]] = []
     for pg_no, page in enumerate(all_pages, start=1):
