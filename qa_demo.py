@@ -86,7 +86,7 @@ def chat(
     question:    str,
     customer:    str = "demo01",
     doc_type:    str = "",
-    top_k:       int = 40,
+    top_k:       int = 60,
     concise:     bool = False,
     fallback:    bool = True,
     rerank_keep: int  = 12,
@@ -142,7 +142,7 @@ def chat(
     "your answer must list seven.\n"
     "• After each fact, cite the source like [2].\n"
     "• If the excerpts don’t answer, reply “Not found in manual.”"
-        )
+    )
         gpt_ans = openai.chat.completions.create(
             model=CHAT_MODEL,
             messages=[{"role":"system","content":sys_prompt},
