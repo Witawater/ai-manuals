@@ -56,7 +56,7 @@ pdf.onchange = () => {
   if(!file){ return; }
 
   uploading = true;
-  statusEl.textContent = 'Uploading… (you can fill the form meanwhile)';
+  statusEl.textContent = 'Waiting… (Press Upload)';
   pdf.disabled = true;                     // prevent second pick
 
   const fd = new FormData(); fd.append('file', file);
