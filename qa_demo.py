@@ -142,7 +142,7 @@ def chat(
     "your answer must list seven.\n"
     "• After each fact, cite the source like [2].\n"
     "• If the excerpts don’t answer, reply “Not found in manual.”"
-    “• Include pre-operation warnings and bullet lists as well as numbered steps. ”
+    "• Include pre-operation warnings and bullet lists as well as numbered steps. "
     )
         gpt_ans = openai.chat.completions.create(
             model=CHAT_MODEL,
