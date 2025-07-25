@@ -89,7 +89,7 @@ def chat(
     top_k:       int = 60,
     concise:     bool = False,
     fallback:    bool = True,
-    rerank_keep: int  = 12,
+    rerank_keep: int  = 16,
     fallback_cut:float = 0.25,
 ) -> Dict[str, object]:
     """Return dict {answer, chunks_used, grounded, confidence}"""
@@ -142,6 +142,7 @@ def chat(
     "your answer must list seven.\n"
     "• After each fact, cite the source like [2].\n"
     "• If the excerpts don’t answer, reply “Not found in manual.”"
+    “• Include pre-operation warnings and bullet lists as well as numbered steps.”
     )
         gpt_ans = openai.chat.completions.create(
             model=CHAT_MODEL,
