@@ -105,7 +105,7 @@ def chat(
     )
 
     if not res.matches:
-        return {"answer":"Nothing found in the manual.",
+        return {"answer":"Nothing found in the manual. Please wait a few seconds and press ASK again.",
                 "chunks_used":[], "grounded":False, "confidence":0.0}
 
     # 4-2) MMR diversity BEFORE boosting
