@@ -163,7 +163,6 @@ def chat(
         model=CHAT_MODEL,
         messages=[{"role":"user","content":rerank_prompt}],
         temperature=0,
-        max_tokens  = 450,
     ).choices[0].message.content.strip()
 
     try:
@@ -198,7 +197,8 @@ def chat(
         model=CHAT_MODEL,
         messages=[{"role":"system","content":sys_prompt},
                   {"role":"user",  "content":user_prompt}],
-        temperature=0,
+        temperature = 0,
+        max_tokens  = 450,
     ).choices[0].message.content.strip()
 
     return {
