@@ -9,12 +9,13 @@ FastAPI service for AI-Manuals
 • POST /feedback          – thumbs-up / thumbs-down (+ chunk IDs)
 • GET  /feedback/summary  – daily 👍 / 👎 counts
 • GET  /feedback/chunks   – hall-of-shame per chunk
+• GET  /metrics           – 30-day recall / confidence JSON
 • static /                – tiny HTML/JS front-end
 """
 
 from __future__ import annotations
 
-import os, tempfile, uuid
+import os, tempfile, uuid, pathlib
 from typing import Any, Dict, List, Optional
 
 from fastapi import (
@@ -33,8 +34,10 @@ from auth         import require_api_key
 from db           import engine
 
 # ─── tunables ────────────────────────────────────────────────
-CHUNK_TOKENS: int = int(os.getenv("CHUNK_TOKENS", "400"))   # ← default 400
+CHUNK_TOKENS: int = int(os.getenv("CHUNK_TOKENS", "400"))
 OVERLAP:      int = int(os.getenv("OVERLAP",      "80"))
+
+LOG_PATH = pathlib.Path("/mnt/data/manual_eval.log")   # shared disk
 
 # in-memory job table
 JOBS: Dict[str, Dict[str, Any]] = {}
@@ -66,7 +69,7 @@ def _ingest_and_cleanup(path: str, customer: str, doc_id: str) -> None:
             OVERLAP,
             dry_run=False,
             progress_cb=_progress,
-            common_meta=JOBS[doc_id].get("meta", {}),   # ← pass user metadata
+            common_meta=JOBS[doc_id].get("meta", {}),
         )
         JOBS[doc_id]["ready"] = True
         print(f"✅ Ingest complete: {path}")
@@ -74,8 +77,10 @@ def _ingest_and_cleanup(path: str, customer: str, doc_id: str) -> None:
         JOBS.setdefault(doc_id, {})["error"] = str(exc)
         print(f"🛑 Ingest failed: {exc}")
     finally:
-        try: os.remove(path)
-        except FileNotFoundError: pass
+        try:
+            os.remove(path)
+        except FileNotFoundError:
+            pass
 
 
 @app.post("/upload", dependencies=[Depends(require_api_key)])
@@ -208,6 +213,47 @@ def worst_chunks(days: int = 30, min_votes: int = 1, limit: int = 50) -> List[Di
         } for r in rows]
 # ╰────────────────────────────────────────────────────────────╯
 
-# ╭────────────────── 5) Serve static front-end ───────────────╮
+# ╭────────────────── 5) Metrics route (QA scoreboard) ───────╮
+def _tail(path: pathlib.Path, n: int = 2000) -> List[str]:
+    """Return last *n* lines of a file (efficient tail)."""
+    if not path.exists():
+        return []
+    with path.open("rb") as f:
+        f.seek(0, os.SEEK_END)
+        end = f.tell()
+        size = 0
+        block = []
+        while len(block) <= n and end > 0:
+            step = min(4096, end)
+            end -= step
+            f.seek(end)
+            block[:0] = f.read(step).splitlines()
+        return [b.decode("utf-8") for b in block[-n:]]
+
+@app.get("/metrics", dependencies=[Depends(require_api_key)])
+def metrics():
+    rows = _tail(LOG_PATH, 1500)                      # ≈ last 2-3 months
+    day_stats: Dict[str, Dict[str, List[float]]] = {}
+    for ln in rows:
+        try:
+            ts, _tag, chunks, conf = ln.strip().split("\t")
+        except ValueError:
+            continue
+        day = ts[:10]
+        d = day_stats.setdefault(day, {"chunks": [], "conf": []})
+        d["chunks"].append(int(chunks))
+        d["conf"].append(float(conf))
+    out = []
+    for day in sorted(day_stats)[-30:]:               # last 30 days
+        d = day_stats[day]
+        out.append({
+            "day": day,
+            "avg_chunks": sum(d["chunks"]) / len(d["chunks"]),
+            "avg_conf":   sum(d["conf"])   / len(d["conf"]),
+        })
+    return out
+# ╰────────────────────────────────────────────────────────────╯
+
+# ╭────────────────── 6) Serve static front-end ───────────────╮
 app.mount("/", StaticFiles(directory="web", html=True), name="web")
 # ╰────────────────────────────────────────────────────────────╯

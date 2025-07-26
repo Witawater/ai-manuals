@@ -57,7 +57,7 @@ pdf.onchange = () => {
 
   uploading = true;
   statusEl.textContent = 'Waiting… (Press Upload)';
-  pdf.disabled = true;                     // prevent second pick
+  pdf.disabled = true;
 
   const fd = new FormData(); fd.append('file', file);
 
@@ -75,10 +75,10 @@ pdf.onchange = () => {
 
 // ────────── 2) “Upload / Next” button now only shows the form ──────────
 nextBtn.onclick = () => {
-  if(document.getElementById('metaForm')) return;    // already open
+  if(document.getElementById('metaForm')) return;
   if(!pdf.files.length){ alert('First choose a PDF'); return; }
   showMetaForm();
-  nextBtn.disabled = true;                           // don’t press twice
+  nextBtn.disabled = true;
 };
 
 // ────────── 3) ingest status polling ──────────
@@ -89,7 +89,7 @@ async function checkReady(){
     clearInterval(pollTimer);
     uploading = false;
     statusEl.textContent = '✅ Ready – press Ask';
-    askBtn.disabled = false;                         // highlight
+    askBtn.disabled = false;
   }
 }
 
@@ -118,7 +118,7 @@ async function saveMeta(){
 
   await fetch('/upload/metadata', {method:'POST', headers: headers(), body: fd});
   document.getElementById('metaStatus').textContent = '✔️ saved';
-  q.disabled = false;                     // user can type question right away
+  q.disabled = false;
 }
 
 // ────────── 5) ask flow ──────────
@@ -134,6 +134,40 @@ async function ask(){
   answerEl.textContent = js.answer;
   askBtn.disabled = false;
 }
+</script>
+
+<!-- ────────── 6) QA Health chart ────────── -->
+<hr>
+<h4>QA Health (last 30 days)</h4>
+<canvas id="qaChart" height="120"></canvas>
+<script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.2/dist/chart.umd.min.js"></script>
+<script>
+async function drawChart(){
+  const data = await fetch('/metrics', {headers: headers()}).then(r=>r.json());
+  if(!data.length) return;
+
+  const labels = data.map(d=>d.day.slice(5));          // MM-DD
+  const chunks = data.map(d=>d.avg_chunks);
+  const conf   = data.map(d=>d.avg_conf.toFixed(2));
+
+  new Chart(document.getElementById('qaChart'), {
+    type: 'bar',
+    data: {
+      labels,
+      datasets: [
+        {label:'avg chunks', data:chunks},
+        {label:'avg conf', data:conf, type:'line', yAxisID:'y1'}
+      ]
+    },
+    options:{
+      scales:{
+        y:{beginAtZero:true},
+        y1:{position:'right', min:0, max:1}
+      }
+    }
+  });
+}
+drawChart();
 </script>
 </body>
 </html>
