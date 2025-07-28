@@ -1,40 +1,37 @@
 #!/usr/bin/env python3
 """
-db.py – minimal persistence layer for AI‑Manuals
+db.py – minimal persistence layer for AI-Manuals
 ───────────────────────────────────────────────
-• Creates the `feedback` table if missing.
-• Ensures the `chunks_used` **text[]** column exists.
-• Adds two helpful indexes for fast look‑ups:
-  – (customer, ts)           for /feedback/summary queries
-  – GIN on chunks_used       for /feedback/chunks queries
+Creates/updates:
+
+• feedback            – thumbs-up / thumbs-down (+ chunk IDs)
+• manual_files        – one row per unique PDF (sha256 dedupe guard)
+
+All DDL is idempotent so the file can run on every cold-start.
 """
 
 from __future__ import annotations
 
 import os
-
 from sqlalchemy import create_engine, text
 
-# ---------------------------------------------------------------------------
-# 1. Database connection
-# ---------------------------------------------------------------------------
+# ───────────────────────── 1. DB connection ──────────────────────────
 DATABASE_URL: str | None = os.getenv("DATABASE_URL")
 if not DATABASE_URL:
-    raise RuntimeError("🟥 DATABASE_URL missing – set env var, e.g. postgres://user:pass@host/db")
+    raise RuntimeError(
+        "🟥 DATABASE_URL missing – set env var, e.g. postgres://user:pass@host/db"
+    )
 
-# Slightly bigger pool, enable pre‑ping to avoid broken connections in serverless DBs.
 engine = create_engine(
     DATABASE_URL,
     pool_size=10,
     max_overflow=2,
-    pool_pre_ping=True,
+    pool_pre_ping=True,  # keep-alive for serverless DBs
 )
 
-# ---------------------------------------------------------------------------
-# 2. Schema migrations (idempotent)
-# ---------------------------------------------------------------------------
+# ───────────────────────── 2. Schema migrations ──────────────────────
 with engine.begin() as conn:
-    # Core table -------------------------------------------------------------
+    # ── feedback ------------------------------------------------------
     conn.execute(
         text(
             """
@@ -49,42 +46,52 @@ with engine.begin() as conn:
             """
         )
     )
-
-    # Chunks column ----------------------------------------------------------
     conn.execute(
         text(
-            """
-            ALTER TABLE feedback
-            ADD COLUMN IF NOT EXISTS chunks_used text[];
-            """
-        )
-    )
-
-    # Force correct type in case a previous JSONB column existed ------------
-    conn.execute(
-        text(
-            """
-            ALTER TABLE feedback
-            ALTER COLUMN chunks_used TYPE text[] USING chunks_used::text[];
-            """
-        )
-    )
-
-    # Helpful indexes --------------------------------------------------------
-    conn.execute(
-        text(
-            """
-            CREATE INDEX IF NOT EXISTS feedback_customer_ts_idx
-                ON feedback (customer, ts DESC);
-            """
+            """ALTER TABLE feedback
+               ADD COLUMN IF NOT EXISTS chunks_used text[];"""
         )
     )
     conn.execute(
         text(
+            """ALTER TABLE feedback
+               ALTER COLUMN chunks_used
+               TYPE text[] USING chunks_used::text[];"""
+        )
+    )
+    conn.execute(
+        text(
+            """CREATE INDEX IF NOT EXISTS feedback_customer_ts_idx
+                 ON feedback (customer, ts DESC);"""
+        )
+    )
+    conn.execute(
+        text(
+            """CREATE INDEX IF NOT EXISTS feedback_chunks_gin
+                 ON feedback USING GIN (chunks_used);"""
+        )
+    )
+
+    # ── manual_files  (duplicate-PDF guard) ---------------------------
+    conn.execute(
+        text(
             """
-            CREATE INDEX IF NOT EXISTS feedback_chunks_gin
-                ON feedback USING GIN (chunks_used);
+            CREATE TABLE IF NOT EXISTS manual_files (
+                sha256      CHAR(64) PRIMARY KEY,
+                customer    TEXT NOT NULL,
+                doc_id      TEXT NOT NULL,
+                filename    TEXT,
+                pages       INT,
+                bytes       BIGINT,
+                created_at  TIMESTAMPTZ DEFAULT now()
+            );
             """
+        )
+    )
+    conn.execute(
+        text(
+            """CREATE UNIQUE INDEX IF NOT EXISTS manual_files_cust_sha
+                 ON manual_files (customer, sha256);"""
         )
     )
 

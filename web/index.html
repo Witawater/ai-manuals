@@ -65,6 +65,19 @@ pdf.onchange = () => {
     .then(r => r.json())
     .then(js => {
       DOC_ID = js.doc_id;
+
+      // ─── DUPLICATE guard ──────────────────
+      if(js.status === 'duplicate'){
+        statusEl.textContent = '✅ Manual already uploaded — ready to ask.';
+        showMetaForm();                 // still let them tag doc_type / notes
+        q.disabled    = false;
+        askBtn.disabled = false;
+        nextBtn.disabled = true;
+        uploading = false;
+        return;                         // skip polling
+      }
+
+      // fresh ingest
       pollTimer = setInterval(checkReady, 2000);
     })
     .catch(err => {
@@ -95,6 +108,7 @@ async function checkReady(){
 
 // ────────── 4) metadata form & save ──────────
 function showMetaForm(){
+  if(document.getElementById('metaForm')) return;
   const html = `
     <div id="metaForm">
       <hr><b>What type of manual?</b><br>
