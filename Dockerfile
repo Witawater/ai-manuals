@@ -23,10 +23,15 @@ ENV PYTHONUNBUFFERED=1
 RUN python -m pip install --upgrade pip && \
     pip install --no-cache-dir -r requirements.txt
 
-# ─── Copy rest of the app ────────────────────────
+# ─── Secrets vault files (encrypted env + decrypt helper) ──
+COPY .env.production.enc decrypt_env.py /app/
+
+# ─── Copy the rest of the codebase ───────────────
 COPY . .
 
 # ─── Port and start ──────────────────────────────
 ENV PORT=8000
 EXPOSE ${PORT}
-CMD ["uvicorn", "app:app", "--host", "0.0.0.0", "--port", "8000"]
+
+# Run decrypt_env.py first, then launch Uvicorn
+CMD ["bash", "-c", "python decrypt_env.py && uvicorn app:app --host 0.0.0.0 --port ${PORT}"]
