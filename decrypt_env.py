@@ -6,7 +6,7 @@ decrypt_env.py  – runs inside the container **before** Uvicorn starts.
 • Writes the plaintext to /app/.env so python-dotenv picks it up
 """
 
-import os, subprocess, sys, pathlib, tempfile
+import os, subprocess, sys, pathlib
 
 KEY = os.getenv("VAULT_KEY")
 if not KEY:
@@ -16,19 +16,20 @@ enc_file = pathlib.Path("/app/.env.production.enc")
 if not enc_file.exists():
     print("🟥  /app/.env.production.enc not found"); sys.exit(1)
 
-tmp = tempfile.NamedTemporaryFile(delete=False)
+# Decrypt directly inside /app so we stay on the same filesystem
+dec_path = "/app/.env.dec"
 
 subprocess.check_call(
     [
         "openssl", "enc", "-d",
-        "-aes-256-cbc",            # NOTE: CBC (portable)
+        "-aes-256-cbc",            # portable cipher
         "-pbkdf2", "-iter", "100000",
         "-in", str(enc_file),
-        "-pass", f"pass:{KEY}"
-    ],
-    stdout=tmp
+        "-pass", f"pass:{KEY}",
+        "-out", dec_path           # write here
+    ]
 )
 
-# Move into place for python-dotenv
-os.replace(tmp.name, "/app/.env")
+# Atomic rename → python-dotenv will read /app/.env
+os.replace(dec_path, "/app/.env")
 print("🔐  .env decrypted OK")
