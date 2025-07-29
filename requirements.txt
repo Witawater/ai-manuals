@@ -42,6 +42,7 @@ python-dateutil==2.9.0.post0
 python-dotenv==1.1.1
 python-multipart==0.0.20
 PyYAML==6.0.2
+rank-bm25==0.2.2      # lightweight pure-python BM25
 regex==2024.11.6
 requests==2.32.4
 scikit-learn==1.5.0
