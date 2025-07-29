@@ -4,35 +4,35 @@ qa_demo.py – question-answer helper for AI-Manuals
 ──────────────────────────────────────────────────
 • Max-Marginal-Relevance keeps diverse chunks
 • Soft boosts for doc_type and user notes
-• Expanded system prompt guarantees every bullet / warning is kept verbatim
+• **New:** system prompt now forces a clean Markdown ordered-list layout
 """
 
 from __future__ import annotations
-
 import os, re, time
 from typing import Dict, List, Tuple
 
 import dotenv
 from openai import OpenAI
-from pinecone import Pinecone, ServerlessSpec               # v3 SDK
+from pinecone import Pinecone, ServerlessSpec           # v3 SDK
 from sklearn.metrics.pairwise import cosine_similarity
 
-# ─── 1. Config & clients ─────────────────────────────────
+# ─── 1. Config & clients ───────────────────────────────────
 dotenv.load_dotenv(".env")
+
 DEBUG       = True
 EMBED_MODEL = os.getenv("OPENAI_EMBED_MODEL", "text-embedding-3-small")
 CHAT_MODEL  = os.getenv("OPENAI_CHAT_MODEL",  "gpt-4o")
 INDEX_NAME  = os.getenv("PINECONE_INDEX",     "manuals-small")
 
-DIM    = 3072 if "large" in EMBED_MODEL else 1536
-ENV    = os.getenv("PINECONE_ENV", "")
-REGION = (ENV.split("-", 1)[-1] or "us-east1").lower()
-CLOUD  = "aws" if "aws" in ENV.lower() else "gcp"
+DIM     = 3072 if "large" in EMBED_MODEL else 1536
+ENV     = os.getenv("PINECONE_ENV", "")
+REGION  = (ENV.split("-", 1)[-1] or "us-east1").lower()
+CLOUD   = "aws" if "aws" in ENV.lower() else "gcp"
 
-pc     = Pinecone(api_key=os.getenv("PINECONE_API_KEY"), environment=ENV)
-openai = OpenAI(api_key=os.getenv("OPENAI_API_KEY"))
+pc      = Pinecone(api_key=os.getenv("PINECONE_API_KEY"), environment=ENV)
+openai  = OpenAI(api_key=os.getenv("OPENAI_API_KEY"))
 
-# ensure index exists
+# index existence / dim-check
 if INDEX_NAME not in pc.list_indexes().names():
     print(f"ℹ️  '{INDEX_NAME}' missing – creating …")
     pc.create_index(
@@ -47,17 +47,19 @@ else:
         raise RuntimeError(f"Index dim {info.dimension} ≠ expected {DIM}")
 idx = pc.Index(INDEX_NAME)
 
-# ─── 2. helpers ──────────────────────────────────────────
+# ─── 2. helpers ────────────────────────────────────────────
 def _embed(text: str) -> List[float]:
     return openai.embeddings.create(model=EMBED_MODEL, input=text).data[0].embedding
 
 
 def mmr(matches, *, k: int = 20, lam: float = 0.5):
     """Return k Max-Marginal-Relevance matches."""
-    if k >= len(matches): return matches
-    vecs      = [m.values for m in matches]
-    simM      = cosine_similarity(vecs, vecs)
-    q_sim     = [m.score for m in matches]
+    if k >= len(matches):
+        return matches
+
+    vecs  = [m.values for m in matches]
+    simM  = cosine_similarity(vecs, vecs)
+    q_sim = [m.score for m in matches]
 
     sel, rest = [0], list(range(1, len(matches)))
     while len(sel) < k and rest:
@@ -69,7 +71,7 @@ def mmr(matches, *, k: int = 20, lam: float = 0.5):
         sel.append(idx)
     return [matches[i] for i in sel]
 
-# ─── 3. chat() entrypoint ────────────────────────────────
+# ─── 3. chat() entry-point ─────────────────────────────────
 def chat(
     question:    str,
     customer:    str = "demo01",
@@ -80,7 +82,7 @@ def chat(
     rerank_keep: int  = 16,
     fallback_cut:float = 0.25,
 ) -> Dict[str, object]:
-    """Return {answer, chunks_used, grounded, confidence}."""
+    """Return {answer, chunks_used, grounded, confidence}"""
 
     # 3-1 dense retrieval
     q_vec = _embed(question)
@@ -112,8 +114,8 @@ def chat(
     if DEBUG:
         print(f"\nℹ️ After MMR {len(res.matches)} chunks (top 6):")
         for i, m in enumerate(res.matches[:6]):
-            txt = m.metadata.get("text","").splitlines()[0][:90]
-            print(f"  [{i}] score={m.score:.4f} → {txt}…")
+            first_line = (m.metadata.get('text') or '').splitlines()[0][:90]
+            print(f"  [{i}] score={m.score:.4f} → {first_line}…")
 
     # 3-3 fallback gate
     have_docs = res.matches and sum(m.score for m in res.matches[:2]) / 2 > fallback_cut
@@ -147,8 +149,9 @@ def chat(
         messages=[{"role":"user","content":rerank_prompt}],
         temperature=0,
     ).choices[0].message.content.strip()
-    keep = {int(x) for x in re.split(r"[,\s]+", best_ids) if x.isdigit()}
-    selected = [m for i, m in enumerate(res.matches) if i in keep][:rerank_keep] or res.matches[:rerank_keep]
+    keep     = {int(x) for x in re.split(r"[,\s]+", best_ids) if x.isdigit()}
+    selected = ([m for i, m in enumerate(res.matches) if i in keep][:rerank_keep]
+                or res.matches[:rerank_keep])
 
     # 3-5 build GPT context
     context = "\n\n".join(
@@ -156,27 +159,29 @@ def chat(
         for i, m in enumerate(selected)
     )
 
+    # ── NEW deterministic formatting rule ──────────────────
     sys_prompt = (
-        "You are a technical assistant answering **only** from the manual excerpts "
-        "below. Follow these rules:\n"
-        "• Include **all numbered steps**, bullet-point warnings, preparation steps, "
-        "key sequences, and any display confirmations verbatim.\n"
-        "• Do not summarise away instructions; if the manual lists seven steps, "
-        "your answer must list seven.\n"
-        "• Cite each fact like [2]. If the excerpts don’t answer, reply “Not found in manual.”"
+        "You are a technical assistant answering **only** from the manual "
+        "excerpts below.  Format the final answer as a **Markdown ordered "
+        "list** (“1. …”, “2. …”), leave one blank line between items, and "
+        "**bold the imperative verb** at the start of each step.\n"
+        "• Include every numbered step, bullet warning, key sequence, and display "
+        "confirmation verbatim.\n"
+        "• Cite each fact like [2].  If the excerpts don’t answer, reply "
+        "“Not found in manual.”"
     )
+
     user_prompt = (
-        f"{context}\n\n► QUESTION: {question}\n\n" +
-        ("Answer in 2–4 sentences and cite sources."
-         if concise else "Write a precise, complete answer with citations.")
+        f"{context}\n\n► QUESTION: {question}\n\n"
+        + ("Answer in 2–4 sentences and cite sources."
+           if concise else "Write a precise, complete answer with citations.")
     )
 
     answer = openai.chat.completions.create(
         model=CHAT_MODEL,
         messages=[{"role":"system","content":sys_prompt},
                   {"role":"user",  "content":user_prompt}],
-        temperature=0,
-        max_tokens=450,
+        temperature=0, max_tokens=450,
     ).choices[0].message.content.strip()
 
     return {

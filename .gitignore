@@ -28,4 +28,7 @@ __pycache__/
 
 # Build artifacts
 dist/
-*.egg-info/
+*.egg-info/vault_key.txt
+vault_key.txt
+.env.production
+.env.production
