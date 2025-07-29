@@ -23,9 +23,9 @@ from sklearn.metrics.pairwise import cosine_similarity
 dotenv.load_dotenv(".env")
 
 DEBUG        = True
-EMBED_MODEL  = os.getenv("OPENAI_EMBED_MODEL", "text-embedding-3-small")
+EMBED_MODEL  = os.getenv("OPENAI_EMBED_MODEL", "text-embedding-3-large")
 CHAT_MODEL   = os.getenv("OPENAI_CHAT_MODEL",  "gpt-4o")
-INDEX_NAME   = os.getenv("PINECONE_INDEX",     "manuals-small")
+INDEX_NAME   = os.getenv("PINECONE_INDEX",     "manuals-large")
 
 DIM          = 3072 if "large" in EMBED_MODEL else 1536
 ENV          = os.getenv("PINECONE_ENV", "")
