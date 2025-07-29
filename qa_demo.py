@@ -5,7 +5,7 @@ qa_demo.py – hybrid Q-and-A for AI-Manuals
 ▪ Embedding × BM25 hybrid ranking (α = 0.50)  
 ▪ Safety-word guard keeps WARNING / NOTICE chunks  
 ▪ Max-Marginal-Relevance for diversity  
-▪ GPT rerank → clean **Markdown ordered list** answer
+▪ GPT rerank → clean **Markdown ordered-list** answer
 """
 
 from __future__ import annotations
@@ -13,13 +13,13 @@ import os, re, time
 from typing import Dict, List, Tuple
 
 import dotenv
-import numpy as np                         # ←  NumPy at top-level
+import numpy as np
 from openai       import OpenAI
 from pinecone     import Pinecone, ServerlessSpec
 from rank_bm25    import BM25Okapi
 from sklearn.metrics.pairwise import cosine_similarity
 
-# ─────────────────── 1. CONFIG ─────────────────────────────
+# ─────────────── 1. CONFIG ───────────────
 dotenv.load_dotenv(".env")
 
 DEBUG        = True
@@ -32,17 +32,17 @@ ENV          = os.getenv("PINECONE_ENV", "")
 REGION       = (ENV.split("-", 1)[-1] or "us-east1").lower()
 CLOUD        = "aws" if "aws" in ENV.lower() else "gcp"
 
-MMR_KEEP     = 40          # chunks kept after diversity
-RERANK_KEEP  = 24          # chunks shown to GPT
-ALPHA        = 0.50        # embed weight in hybrid   (0 ≤ α ≤ 1)
-FALLBACK_CUT = 0.25        # below → fallback answer
+MMR_KEEP     = 40
+RERANK_KEEP  = 24
+ALPHA        = 0.50
+FALLBACK_CUT = 0.25
 
 SAFETY_WORDS = ("warning", "notice", "important", "alarm", "code ")
 
 pc     = Pinecone(api_key=os.getenv("PINECONE_API_KEY"), environment=ENV)
 openai = OpenAI(api_key=os.getenv("OPENAI_API_KEY"))
 
-# ─────────────────── 2. INDEX GUARD ───────────────────────
+# ─────────────── 2. INDEX GUARD ───────────────
 if INDEX_NAME not in pc.list_indexes().names():
     print(f"ℹ️  '{INDEX_NAME}' missing – creating …")
     pc.create_index(
@@ -59,29 +59,29 @@ else:
         raise RuntimeError(f"Index dim {info.dimension} ≠ expected {DIM}")
 idx = pc.Index(INDEX_NAME)
 
-_tokenize = re.compile(r"\w+").findall                 # tiny word-tokeniser
+_tokenize = re.compile(r"\w+").findall     # tiny tokenizer
 
-# ─────────────────── 3. HELPERS ───────────────────────────
-def _embed(txt: str) -> List[float]:
-    return openai.embeddings.create(model=EMBED_MODEL, input=txt).data[0].embedding
+# ─────────────── 3. HELPERS ───────────────
+def _embed(text: str) -> List[float]:
+    return openai.embeddings.create(model=EMBED_MODEL, input=text).data[0].embedding
 
 
 def mmr(matches, *, k: int, lam: float = .5):
     """Return *k* Max-Marginal-Relevance matches."""
     if k >= len(matches):
         return matches
-    vecs  = [m.values for m in matches]
-    sim   = cosine_similarity(vecs, vecs)
-    q_sim = [m.score for m in matches]
+    vecs = [m.values for m in matches]
+    sim  = cosine_similarity(vecs, vecs)
+    qsim = [m.score for m in matches]
 
     chosen, rest = [0], list(range(1, len(matches)))
     while len(chosen) < k and rest:
-        mmr_scores = [lam*q_sim[i] - (1-lam)*sim[i][chosen].max() for i in rest]
-        best       = rest.pop(mmr_scores.index(max(mmr_scores)))
+        scores = [lam*qsim[i] - (1-lam)*sim[i][chosen].max() for i in rest]
+        best   = rest.pop(scores.index(max(scores)))
         chosen.append(best)
     return [matches[i] for i in chosen]
 
-# ─────────────────── 4. MAIN ENTRYPOINT ───────────────────
+# ─────────────── 4. MAIN ───────────────
 def chat(
     question:   str,
     customer:   str = "demo01",
@@ -90,48 +90,42 @@ def chat(
     concise:    bool = False,
     fallback:   bool = True,
 ) -> Dict[str, object]:
-    """
-    Returns:
-        dict = {answer, chunks_used, grounded, confidence}
-    """
 
-    # 4-1  dense retrieval (embeddings)
+    # 4-1 dense retrieval
     q_vec = _embed(question)
     res   = idx.query(
-        vector=q_vec,
-        top_k=top_k,
+        vector=q_vec, top_k=top_k,
         filter={"customer": {"$eq": customer}},
         include_metadata=True,
-        include_values=True,     # vectors needed for MMR
+        include_values=True,
     )
     if not res.matches:
-        return {"answer": "Nothing found – retry in a few seconds.",
-                "chunks_used": [], "grounded": False, "confidence": 0.0}
+        return {"answer":"Nothing found – retry in a few seconds.",
+                "chunks_used":[], "grounded":False, "confidence":0.0}
 
-    # 4-2  BM25 keyword scores over the same matches
-    docs_tokens = [_tokenize((m.metadata.get("text") or "").lower())
-                   for m in res.matches]
-    bm25   = BM25Okapi(docs_tokens)
-    q_tok  = _tokenize(question.lower())
+    # 4-2 BM25
+    docs_tok   = [_tokenize((m.metadata.get("text") or "").lower()) for m in res.matches]
+    bm25       = BM25Okapi(docs_tok)
+    q_tok      = _tokenize(question.lower())
     bm25_scores = np.asarray(bm25.get_scores(q_tok), dtype=float)
     max_bm25    = bm25_scores.max() if bm25_scores.size else 0.0
     bm25_norm   = (bm25_scores / max_bm25) if max_bm25 else bm25_scores
+    bm25_norm   = bm25_norm.tolist()           # ← ensure native floats
 
-    # 4-3  hybrid score  (α·embed  + (1-α)·bm25)
-    for m, b, e in zip(res.matches, bm25_norm,
-                       [m.score for m in res.matches]):
-        m.score = ALPHA*e + (1-ALPHA)*b
+    # 4-3 hybrid score
+    for m, b, e in zip(res.matches, bm25_norm, [m.score for m in res.matches]):
+        m.score = float(ALPHA*e + (1-ALPHA)*b)   # ← cast to float
 
-    # 4-4  safety-word priority  + diversity (MMR)
+    # 4-4 safety + diversity
     safety, rest = [], []
     for m in res.matches:
         txt = (m.metadata.get("text") or "").lower()
         (safety if any(w in txt for w in SAFETY_WORDS) else rest).append(m)
-    safety = safety[:6]                                    # cap
+    safety = safety[:6]
     rest   = mmr(rest, k=max(0, MMR_KEEP-len(safety)), lam=.5)
     res.matches = safety + rest
 
-    # 4-5  soft boosts (doc_type + notes keyword)
+    # 4-5 soft boosts
     boosted = []
     q_low   = question.lower()
     for m in res.matches:
@@ -149,46 +143,44 @@ def chat(
         for i, m in enumerate(res.matches[:6]):
             print(f"  [{i}] {m.score:.4f} → {(m.metadata.get('text') or '')[:80]}…")
 
-    # 4-6  fallback gate
-    top_avg = np.mean([m.score for m in res.matches[:2]])
+    # 4-6 fallback gate
+    top_avg = float(np.mean([m.score for m in res.matches[:2]]))  # ← native float
     if top_avg < FALLBACK_CUT:
         if not fallback:
-            return {"answer": "Manual doesn’t cover this.",
-                    "chunks_used": [], "grounded": True, "confidence": 0.0}
+            return {"answer":"Manual doesn’t cover this.",
+                    "chunks_used":[], "grounded":True, "confidence":0.0}
         fb = openai.chat.completions.create(
             model=CHAT_MODEL,
             messages=[
-                {"role": "system", "content": "You are a helpful assistant."},
-                {"role": "user",   "content": question}
+                {"role":"system","content":"You are a helpful assistant."},
+                {"role":"user",  "content":question}
             ],
             temperature=.3,
         ).choices[0].message.content.strip()
-        return {"answer": "(General guidance) "+fb,
-                "chunks_used": [], "grounded": False, "confidence": .4}
+        return {"answer":"(General guidance) "+fb,
+                "chunks_used":[], "grounded":False, "confidence":.4}
 
-    # 4-7  GPT rerank → RERANK_KEEP
+    # 4-7 GPT rerank
     rerank_prompt = (
         "Pick the most relevant chunks.\n\nQUESTION:\n"
         f"{question}\n\nCHUNKS:\n" +
-        "\n\n".join(f"[{i}] {m.metadata.get('text','')[:400]}"
-                    for i, m in enumerate(res.matches)) +
+        "\n\n".join(f"[{i}] {m.metadata.get('text','')[:400]}" for i, m in enumerate(res.matches)) +
         f"\n\nReturn exactly {RERANK_KEEP} numbers (comma-separated)."
     )
     keep = openai.chat.completions.create(
         model=CHAT_MODEL,
-        messages=[{"role": "user", "content": rerank_prompt}],
+        messages=[{"role":"user","content":rerank_prompt}],
         temperature=0,
     ).choices[0].message.content
     idx_keep = {int(x) for x in re.findall(r"\d+", keep)}
     sel = [m for i, m in enumerate(res.matches) if i in idx_keep][:RERANK_KEEP] \
           or res.matches[:RERANK_KEEP]
 
-    # 4-8  build context + final answer
+    # 4-8 final answer
     context = "\n\n".join(
         f"[{i+1}] {m.metadata.get('text','')[:1500].strip()}"
         for i, m in enumerate(sel)
     )
-
     sys_prompt = (
         "You are a technical assistant answering **only** from the excerpts below. "
         "Output a **Markdown ordered list** (1., 2., …) and leave one blank line "
@@ -199,14 +191,13 @@ def chat(
     )
     user_prompt = (
         f"{context}\n\n► QUESTION: {question}\n\n" +
-        ("Answer in 2–4 sentences and cite sources."
+        ("Answer in 2-4 sentences and cite sources."
          if concise else "Write a precise, complete answer with citations.")
     )
-
     answer = openai.chat.completions.create(
         model=CHAT_MODEL,
-        messages=[{"role": "system", "content": sys_prompt},
-                  {"role": "user",   "content": user_prompt}],
+        messages=[{"role":"system","content":sys_prompt},
+                  {"role":"user",  "content":user_prompt}],
         temperature=0,
         max_tokens=450,
     ).choices[0].message.content.strip()
@@ -218,7 +209,7 @@ def chat(
         "confidence":  float(sel[0].score),
     }
 
-# ─────────────────── 5. SMOKE TEST ────────────────────────
+# ─────────────── 5. SMOKE TEST ───────────────
 if __name__ == "__main__":
     for q in ["How do I drain the system?",
               "Does it support Modbus?",
