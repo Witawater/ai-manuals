@@ -134,5 +134,26 @@ async def ask(question:str=Form(...), customer:str=Form("demo01"), doc_type:str=
 
 
 # (feedback handlers / metrics stay unchanged)
-
+@app.get("/metrics")
+def get_metrics():
+    lines = []
+    try:
+        with open(LOG_PATH) as f:
+            for line in f:
+                line = line.strip()
+                if not line:
+                    continue
+                parts = line.split()
+                if len(parts) == 4:
+                    timestamp, tag, count, score = parts
+                    lines.append({
+                        "timestamp": timestamp,
+                        "tag": tag,
+                        "count": int(count),
+                        "avg_conf": float(score),
+                    })
+    except FileNotFoundError:
+        return {"error": "log file not found"}
+    return {"records": lines[-30:]}  # Return last 30 entries
+    
 app.mount("/", StaticFiles(directory="web", html=True), name="web")
