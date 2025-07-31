@@ -140,8 +140,13 @@ def save_meta(doc_id: str = Form(...), doc_type: str = Form(...), notes: str = F
 
 # ╭──────────────── 2) Chat route ────────────────────────────╮
 @app.post("/chat", dependencies=[Depends(require_api_key)])
-async def ask(question: str = Form(...), customer: str = Form("demo01"), doc_type: str = Form("")):
-    res = chat(question, customer, doc_type)
+async def ask(
+    question: str = Form(...),
+    customer: str = Form("demo01"),
+    doc_type: str = Form(""),
+    doc_id: str = Form("")  # ← NEW
+):
+    res = chat(question, customer, doc_type=doc_type, doc_id=doc_id)
     if not res.get("grounded"):
         print("⚠️ fallback (ungrounded)")
     return res

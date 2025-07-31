@@ -89,18 +89,24 @@ def chat(
     question: str,
     customer: str = "demo01",
     doc_type: str = "",
+    doc_id: str = "",
     top_k:    int = 60,
     concise:  bool = False,
     fallback: bool = True,
 ) -> Dict[str, object]:
 
-    q_canon = _norm(question)                # ← NEW (for retrieval only)
+    q_canon = _norm(question)
 
-    # 4-1 dense retrieval
+    # 4-1 dense retrieval (now filtered by doc_id)
     q_vec = _embed(q_canon)
-    res   = idx.query(
+
+    filter_by = {"customer": {"$eq": customer}}
+    if doc_id:
+        filter_by["doc_id"] = {"$eq": doc_id}
+
+    res = idx.query(
         vector=q_vec, top_k=top_k,
-        filter={"customer": {"$eq": customer}},
+        filter=filter_by,
         include_metadata=True, include_values=True,
     )
     if not res.matches:
@@ -116,7 +122,7 @@ def chat(
 
     # 4-3 hybrid score
     for m, b, e in zip(res.matches, bm25_norm, [m.score for m in res.matches]):
-        m.score = float(ALPHA*e + (1-ALPHA)*b)   # ensure native float
+        m.score = float(ALPHA*e + (1-ALPHA)*b)
 
     # 4-4 safety + diversity
     safety, rest = [], []
@@ -211,5 +217,5 @@ if __name__ == "__main__":
     for q in ["How do I drain the system?",
               "Does it support Modbus?",
               "What is 2 + 2?"]:
-        out = chat(q, customer="demo01", doc_type="hardware", concise=True)
+        out = chat(q, customer="demo01", doc_id="put-your-doc-id-here", doc_type="hardware", concise=True)
         print("\nQ:", q, "\n", out["answer"])
