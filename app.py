@@ -67,11 +67,11 @@ def _ingest_and_cleanup(path: str, customer: str, doc_id: str) -> None:
             pass
 
 
-@app.post("/upload", dependencies=[customer: str = Depends(require_api_key)])
+@app.post("/upload")
 async def upload_pdf(
     background_tasks: BackgroundTasks,
     file: UploadFile = File(...),
-    customer: str = Form("demo01"),
+    customer: str = Depends(require_api_key)
 ):
     tmp = os.path.join(tempfile.gettempdir(), f"{uuid.uuid4().hex}_{file.filename}")
     sha, size = hashlib.sha256(), 0
@@ -126,25 +126,30 @@ async def upload_pdf(
 
     return {"doc_id": doc_id, "status": "queued", "file": file.filename}
 
-@app.get("/ingest/status", dependencies=[customer: str = Depends(require_api_key)])
-def ingest_status(doc_id: str):
+@app.get("/ingest/status")
+def ingest_status(doc_id: str, customer: str = Depends(require_api_key)):
     job = JOBS.get(doc_id) or HTTPException(404, "doc_id not found")
     return job
 
-@app.post("/upload/metadata", dependencies=[customer: str = Depends(require_api_key)])
-def save_meta(doc_id: str = Form(...), doc_type: str = Form(...), notes: str = Form("")):
+@app.post("/upload/metadata")
+def save_meta(
+    doc_id: str = Form(...),
+    doc_type: str = Form(...),
+    notes: str = Form(""),
+    customer: str = Depends(require_api_key)
+):
     JOBS.setdefault(doc_id, {}).setdefault("meta", {}).update(
         {"doc_type": doc_type, "notes": notes[:200]})
     return {"ok": True}
 # ╰───────────────────────────────────────────────────────────╯
 
 # ╭──────────────── 2) Chat route ────────────────────────────╮
-@app.post("/chat", dependencies=[customer: str = Depends(require_api_key)])
+@app.post("/chat")
 async def ask(
     question: str = Form(...),
-    customer: str = Form("demo01"),
     doc_type: str = Form(""),
-    doc_id: str = Form("")  # ← NEW
+    doc_id: str = Form(""),
+    customer: str = Depends(require_api_key)
 ):
     res = chat(question, customer, doc_type=doc_type, doc_id=doc_id)
     if not res.get("grounded"):
