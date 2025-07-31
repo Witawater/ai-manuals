@@ -1,24 +1,29 @@
-# auth.py  ─────────────────────────────────────────────
-# Load environment variables from .env file
-from dotenv import load_dotenv
-load_dotenv(dotenv_path=".env", override=True)
+from fastapi import Header, HTTPException, Request
+from sqlalchemy import text
+from db import engine
 
-import os
-from fastapi import Depends, HTTPException, status
-from fastapi.security import APIKeyHeader
+# Optional: track usage
+TRACK_USAGE = False
 
-# Retrieve API key from environment
-API_KEY = os.getenv("API_KEY")
-api_key_header = APIKeyHeader(name="X-API-Key", auto_error=False)
+def require_api_key(x_api_key: str = Header(...)):
+    with engine.begin() as conn:
+        row = conn.execute(
+            text("""SELECT customer, quota, used FROM api_keys
+                    WHERE key = :k"""),
+            {"k": x_api_key}
+        ).fetchone()
 
-# Dependency to enforce API key auth
-def require_api_key(key: str = Depends(api_key_header)):
-    """FastAPI dependency that validates X-API-Key header against environment value."""
-    if not API_KEY:
-        raise RuntimeError("Missing API_KEY in environment. Check your .env file.")
-    if key == API_KEY:
-        return True
-    raise HTTPException(
-        status_code=status.HTTP_401_UNAUTHORIZED,
-        detail="Invalid or missing API key",
-    )
+        if not row:
+            raise HTTPException(status_code=401, detail="Invalid API key")
+
+        customer, quota, used = row
+
+        if TRACK_USAGE:
+            if used >= quota:
+                raise HTTPException(status_code=429, detail="Quota exceeded")
+            conn.execute(
+                text("UPDATE api_keys SET used = used + 1 WHERE key = :k"),
+                {"k": x_api_key}
+            )
+
+        return customer  # returned to FastAPI dependency injection

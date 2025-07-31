@@ -67,7 +67,7 @@ def _ingest_and_cleanup(path: str, customer: str, doc_id: str) -> None:
             pass
 
 
-@app.post("/upload", dependencies=[Depends(require_api_key)])
+@app.post("/upload", dependencies=[customer: str = Depends(require_api_key)])
 async def upload_pdf(
     background_tasks: BackgroundTasks,
     file: UploadFile = File(...),
@@ -126,12 +126,12 @@ async def upload_pdf(
 
     return {"doc_id": doc_id, "status": "queued", "file": file.filename}
 
-@app.get("/ingest/status", dependencies=[Depends(require_api_key)])
+@app.get("/ingest/status", dependencies=[customer: str = Depends(require_api_key)])
 def ingest_status(doc_id: str):
     job = JOBS.get(doc_id) or HTTPException(404, "doc_id not found")
     return job
 
-@app.post("/upload/metadata", dependencies=[Depends(require_api_key)])
+@app.post("/upload/metadata", dependencies=[customer: str = Depends(require_api_key)])
 def save_meta(doc_id: str = Form(...), doc_type: str = Form(...), notes: str = Form("")):
     JOBS.setdefault(doc_id, {}).setdefault("meta", {}).update(
         {"doc_type": doc_type, "notes": notes[:200]})
@@ -139,7 +139,7 @@ def save_meta(doc_id: str = Form(...), doc_type: str = Form(...), notes: str = F
 # ╰───────────────────────────────────────────────────────────╯
 
 # ╭──────────────── 2) Chat route ────────────────────────────╮
-@app.post("/chat", dependencies=[Depends(require_api_key)])
+@app.post("/chat", dependencies=[customer: str = Depends(require_api_key)])
 async def ask(
     question: str = Form(...),
     customer: str = Form("demo01"),
