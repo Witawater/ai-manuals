@@ -6,7 +6,7 @@ FastAPI service for AI-Manuals
 
 from __future__ import annotations
 import os, tempfile, uuid, pathlib, hashlib
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict
 
 from fastapi import (
     BackgroundTasks, Depends, FastAPI, File, Form,
@@ -14,8 +14,10 @@ from fastapi import (
 )
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.staticfiles import StaticFiles
+from fastapi.responses import JSONResponse
 from pydantic import BaseModel
 from sqlalchemy import text
+from sqlalchemy.exc import IntegrityError
 
 # ─── local modules ──────────────────────────────────────────
 from ingest_manual import ingest, pdf_to_chunks
@@ -26,11 +28,11 @@ from db            import engine
 # ─── config ────────────────────────────────────────────────
 CHUNK_TOKENS = int(os.getenv("CHUNK_TOKENS", "400"))
 OVERLAP      = int(os.getenv("OVERLAP",      "80"))
-INDEX_NAME   = os.getenv("PINECONE_INDEX",   "manuals-large")   # NEW
+INDEX_NAME   = os.getenv("PINECONE_INDEX",   "manuals-large")
 
-LOG_PATH = pathlib.Path("/mnt/data/manual_eval.log")            # disk
+LOG_PATH = pathlib.Path("/mnt/data/manual_eval.log")
 
-JOBS: Dict[str, Dict[str, Any]] = {}        # in-mem ingest tracker
+JOBS: Dict[str, Dict[str, Any]] = {}
 
 # ─── FastAPI & CORS ─────────────────────────────────────────
 app = FastAPI()
@@ -45,8 +47,8 @@ app.add_middleware(
 )
 
 # ╭──────────────── 1) PDF upload & ingest ──────────────────╮
-def _ingest_and_cleanup(path:str, customer:str, doc_id:str)->None:
-    def _progress(done:int):
+def _ingest_and_cleanup(path: str, customer: str, doc_id: str) -> None:
+    def _progress(done: int):
         if doc_id in JOBS:
             JOBS[doc_id]["done"] = done
     try:
@@ -59,26 +61,27 @@ def _ingest_and_cleanup(path:str, customer:str, doc_id:str)->None:
         JOBS.setdefault(doc_id, {})["error"] = str(exc)
         print("🛑 ingest failed", exc)
     finally:
-        try: os.remove(path)
-        except FileNotFoundError: pass
+        try:
+            os.remove(path)
+        except FileNotFoundError:
+            pass
 
 
 @app.post("/upload", dependencies=[Depends(require_api_key)])
 async def upload_pdf(
     background_tasks: BackgroundTasks,
     file: UploadFile = File(...),
-    customer: str    = Form("demo01"),
+    customer: str = Form("demo01"),
 ):
-    # —— save to tmp & hash on the fly ———————————————
-    tmp = os.path.join(tempfile.gettempdir(),
-                       f"{uuid.uuid4().hex}_{file.filename}")
+    tmp = os.path.join(tempfile.gettempdir(), f"{uuid.uuid4().hex}_{file.filename}")
     sha, size = hashlib.sha256(), 0
     with open(tmp, "wb") as h:
         while chunk := await file.read(8192):
-            h.write(chunk); sha.update(chunk); size += len(chunk)
+            h.write(chunk)
+            sha.update(chunk)
+            size += len(chunk)
     file_hash = sha.hexdigest()
 
-    # —— duplicate-PDF guard keyed by index name ————————
     with engine.begin() as conn:
         row = conn.execute(
             text("""SELECT doc_id FROM manual_files
@@ -90,7 +93,6 @@ async def upload_pdf(
         print("🔁 duplicate PDF (same index) – skipping ingest")
         return {"doc_id": row.doc_id, "status": "duplicate", "file": file.filename}
 
-    # —— new ingest job ————————————————————————————
     doc_id = uuid.uuid4().hex
     print(f"📥 upload {file.filename}  ➜  {doc_id}")
 
@@ -103,37 +105,49 @@ async def upload_pdf(
     background_tasks.add_task(_ingest_and_cleanup, tmp, customer, doc_id)
 
     with engine.begin() as conn:
-        conn.execute(
-            text("""INSERT INTO manual_files
-                    (sha256, customer, doc_id, filename, bytes, index_name)
-                    VALUES (:h,:c,:d,:f,:b,:i)"""),
-            {"h": file_hash, "c": customer, "d": doc_id,
-             "f": file.filename, "b": size, "i": INDEX_NAME},
-        )
+        try:
+            conn.execute(
+                text("""INSERT INTO manual_files
+                        (sha256, customer, doc_id, filename, bytes, index_name)
+                        VALUES (:h,:c,:d,:f,:b,:i)"""),
+                {"h": file_hash, "c": customer, "d": doc_id,
+                 "f": file.filename, "b": size, "i": INDEX_NAME},
+            )
+        except IntegrityError:
+            print("🔁 duplicate PDF (insert blocked by constraint)")
+            return JSONResponse(
+                content={
+                    "doc_id": row.doc_id if row else "unknown",
+                    "status": "duplicate",
+                    "file": file.filename,
+                },
+                status_code=200,
+            )
+
     return {"doc_id": doc_id, "status": "queued", "file": file.filename}
 
 @app.get("/ingest/status", dependencies=[Depends(require_api_key)])
-def ingest_status(doc_id:str):
-    job = JOBS.get(doc_id) or HTTPException(404,"doc_id not found")
+def ingest_status(doc_id: str):
+    job = JOBS.get(doc_id) or HTTPException(404, "doc_id not found")
     return job
 
 @app.post("/upload/metadata", dependencies=[Depends(require_api_key)])
-def save_meta(doc_id:str=Form(...), doc_type:str=Form(...), notes:str=Form("")):
+def save_meta(doc_id: str = Form(...), doc_type: str = Form(...), notes: str = Form("")):
     JOBS.setdefault(doc_id, {}).setdefault("meta", {}).update(
-        {"doc_type":doc_type, "notes":notes[:200]})
-    return {"ok":True}
+        {"doc_type": doc_type, "notes": notes[:200]})
+    return {"ok": True}
 # ╰───────────────────────────────────────────────────────────╯
 
 # ╭──────────────── 2) Chat route ────────────────────────────╮
 @app.post("/chat", dependencies=[Depends(require_api_key)])
-async def ask(question:str=Form(...), customer:str=Form("demo01"), doc_type:str=Form("")):
+async def ask(question: str = Form(...), customer: str = Form("demo01"), doc_type: str = Form("")):
     res = chat(question, customer, doc_type)
-    if not res.get("grounded"): print("⚠️ fallback (ungrounded)")
+    if not res.get("grounded"):
+        print("⚠️ fallback (ungrounded)")
     return res
 # ╰───────────────────────────────────────────────────────────╯
 
-
-# (feedback handlers / metrics stay unchanged)
+# ╭──────────────── 3) Metrics endpoint ──────────────────────╮
 @app.get("/metrics")
 def get_metrics():
     lines = []
@@ -155,5 +169,7 @@ def get_metrics():
     except FileNotFoundError:
         return {"error": "log file not found"}
     return {"records": lines[-30:]}  # Return last 30 entries
-    
+# ╰───────────────────────────────────────────────────────────╯
+
+# Mount frontend
 app.mount("/", StaticFiles(directory="web", html=True), name="web")
