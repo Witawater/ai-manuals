@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """
 FastAPI service for AI-Manuals
-(updated for text-embedding-3-large / manuals-large index)
+(delayed ingest: wait for metadata before embedding)
 """
 
 from __future__ import annotations
@@ -33,7 +33,6 @@ INDEX_NAME   = os.getenv("PINECONE_INDEX",   "manuals-large")
 LOG_PATH = pathlib.Path("/mnt/data/manual_eval.log")
 JOBS: Dict[str, Dict[str, Any]] = {}
 
-# ─── FastAPI & CORS ─────────────────────────────────────────
 app = FastAPI()
 app.add_middleware(
     CORSMiddleware,
@@ -45,7 +44,7 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
-# ╭──────────────── 1) PDF upload & ingest ──────────────────╮
+# ─── Ingestion worker ───────────────────────────────────────
 def _ingest_and_cleanup(path: str, customer: str, doc_id: str) -> None:
     def _progress(done: int):
         if doc_id in JOBS:
@@ -54,7 +53,7 @@ def _ingest_and_cleanup(path: str, customer: str, doc_id: str) -> None:
         ingest(path, customer, CHUNK_TOKENS, OVERLAP,
                dry_run=False, progress_cb=_progress,
                common_meta=JOBS[doc_id].get("meta", {}),
-               doc_id=doc_id)  # ✅ Inject doc_id here
+               doc_id=doc_id)
         JOBS[doc_id]["ready"] = True
         print("✅ ingest complete", path)
     except Exception as exc:
@@ -64,9 +63,9 @@ def _ingest_and_cleanup(path: str, customer: str, doc_id: str) -> None:
         try: os.remove(path)
         except FileNotFoundError: pass
 
+# ─── 1. Upload PDF (but do not ingest yet) ──────────────────
 @app.post("/upload")
 async def upload_pdf(
-    background_tasks: BackgroundTasks,
     file: UploadFile = File(...),
     customer: str = Depends(require_api_key)
 ):
@@ -98,8 +97,14 @@ async def upload_pdf(
     except Exception:
         total = 0
 
-    JOBS[doc_id] = {"ready": False, "total": total, "done": 0, "meta": {}}
-    background_tasks.add_task(_ingest_and_cleanup, tmp, customer, doc_id)
+    JOBS[doc_id] = {
+        "ready": False,
+        "total": total,
+        "done": 0,
+        "meta": {},
+        "path": tmp,
+        "customer": customer
+    }
 
     with engine.begin() as conn:
         try:
@@ -113,33 +118,46 @@ async def upload_pdf(
         except IntegrityError:
             print("🔁 duplicate PDF (insert blocked by constraint)")
             return JSONResponse(
-                content={
-                    "doc_id": row.doc_id if row else "unknown",
-                    "status": "duplicate",
-                    "file": file.filename,
-                },
+                content={"doc_id": row.doc_id if row else "unknown",
+                         "status": "duplicate", "file": file.filename},
                 status_code=200,
             )
 
     return {"doc_id": doc_id, "status": "queued", "file": file.filename}
 
-@app.get("/ingest/status")
-def ingest_status(doc_id: str, customer: str = Depends(require_api_key)):
-    job = JOBS.get(doc_id) or HTTPException(404, "doc_id not found")
-    return job
-
+# ─── 2. Save metadata & trigger ingest ──────────────────────
 @app.post("/upload/metadata")
 def save_meta(
+    background_tasks: BackgroundTasks,
     doc_id: str = Form(...),
     doc_type: str = Form(...),
     notes: str = Form(""),
     customer: str = Depends(require_api_key)
 ):
-    JOBS.setdefault(doc_id, {}).setdefault("meta", {}).update(
-        {"doc_type": doc_type, "notes": notes[:200]})
+    job = JOBS.get(doc_id)
+    if not job or "path" not in job:
+        raise HTTPException(404, "Upload not found or missing file path")
+
+    JOBS[doc_id].setdefault("meta", {}).update(
+        {"doc_type": doc_type, "notes": notes[:200]}
+    )
+
+    background_tasks.add_task(
+        _ingest_and_cleanup,
+        path=job["path"],
+        customer=job["customer"],
+        doc_id=doc_id
+    )
+
     return {"ok": True}
 
-# ╭──────────────── 2) Chat route ────────────────────────────╮
+# ─── 3. Ingest status ───────────────────────────────────────
+@app.get("/ingest/status")
+def ingest_status(doc_id: str, customer: str = Depends(require_api_key)):
+    job = JOBS.get(doc_id) or HTTPException(404, "doc_id not found")
+    return job
+
+# ─── 4. Chat route ──────────────────────────────────────────
 @app.post("/chat")
 async def ask(
     question: str = Form(...),
@@ -152,7 +170,7 @@ async def ask(
         print("⚠️ fallback (ungrounded)")
     return res
 
-# ╭──────────────── 3) Metrics endpoint ──────────────────────╮
+# ─── 5. QA Metrics ──────────────────────────────────────────
 @app.get("/metrics")
 def get_metrics():
     lines = []
@@ -173,7 +191,7 @@ def get_metrics():
                     })
     except FileNotFoundError:
         return {"error": "log file not found"}
-    return {"records": lines[-30:]}
+    return {"records": lines[-30:]}  # Last 30
 
-# Mount frontend
+# ─── Frontend ───────────────────────────────────────────────
 app.mount("/", StaticFiles(directory="web", html=True), name="web")
