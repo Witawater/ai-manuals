@@ -31,7 +31,6 @@ OVERLAP      = int(os.getenv("OVERLAP",      "80"))
 INDEX_NAME   = os.getenv("PINECONE_INDEX",   "manuals-large")
 
 LOG_PATH = pathlib.Path("/mnt/data/manual_eval.log")
-
 JOBS: Dict[str, Dict[str, Any]] = {}
 
 # ─── FastAPI & CORS ─────────────────────────────────────────
@@ -54,18 +53,16 @@ def _ingest_and_cleanup(path: str, customer: str, doc_id: str) -> None:
     try:
         ingest(path, customer, CHUNK_TOKENS, OVERLAP,
                dry_run=False, progress_cb=_progress,
-               common_meta=JOBS[doc_id].get("meta", {}))
+               common_meta=JOBS[doc_id].get("meta", {}),
+               doc_id=doc_id)  # ✅ Inject doc_id here
         JOBS[doc_id]["ready"] = True
         print("✅ ingest complete", path)
     except Exception as exc:
         JOBS.setdefault(doc_id, {})["error"] = str(exc)
         print("🛑 ingest failed", exc)
     finally:
-        try:
-            os.remove(path)
-        except FileNotFoundError:
-            pass
-
+        try: os.remove(path)
+        except FileNotFoundError: pass
 
 @app.post("/upload")
 async def upload_pdf(
@@ -141,7 +138,6 @@ def save_meta(
     JOBS.setdefault(doc_id, {}).setdefault("meta", {}).update(
         {"doc_type": doc_type, "notes": notes[:200]})
     return {"ok": True}
-# ╰───────────────────────────────────────────────────────────╯
 
 # ╭──────────────── 2) Chat route ────────────────────────────╮
 @app.post("/chat")
@@ -155,7 +151,6 @@ async def ask(
     if not res.get("grounded"):
         print("⚠️ fallback (ungrounded)")
     return res
-# ╰───────────────────────────────────────────────────────────╯
 
 # ╭──────────────── 3) Metrics endpoint ──────────────────────╮
 @app.get("/metrics")
@@ -178,8 +173,7 @@ def get_metrics():
                     })
     except FileNotFoundError:
         return {"error": "log file not found"}
-    return {"records": lines[-30:]}  # Return last 30 entries
-# ╰───────────────────────────────────────────────────────────╯
+    return {"records": lines[-30:]}
 
 # Mount frontend
 app.mount("/", StaticFiles(directory="web", html=True), name="web")

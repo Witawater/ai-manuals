@@ -4,7 +4,7 @@ ingest_manual.py – Chunk ► Embed ► Upsert ONE PDF into Pinecone
 ────────────────────────────────────────────────────────────────
 ✓ Uses text-embedding-3-large  (3072-dim)  
 ✓ Writes into the new “manuals-large” index  
-✓ Progress-callback & common-metadata unchanged
+✓ Now adds `doc_id` to all chunks for isolated querying
 """
 
 from __future__ import annotations
@@ -21,7 +21,7 @@ load_dotenv(".env")
 
 INDEX_NAME   = os.getenv("PINECONE_INDEX",  "manuals-large")
 EMBED_MODEL  = os.getenv("OPENAI_EMBED_MODEL", "text-embedding-3-large")
-DIMENSION    = 3072                            # 3-large → 3072 dims
+DIMENSION    = 3072
 
 openai_client = OpenAI(api_key=os.environ["OPENAI_API_KEY"])
 enc           = tiktoken.get_encoding("cl100k_base")
@@ -40,7 +40,7 @@ def retry(fn, *a, **kw):
             time.sleep(wait)
     raise RuntimeError("Too many rate-limit failures.")
 
-# ───── 3. CHUNKING (unchanged, layout=True keeps tables) ─────
+# ───── 3. CHUNKING ─────
 def pdf_to_chunks(path: str, chunk_tokens: int, overlap: int) -> Tuple[List[str], List[dict]]:
     fname = os.path.basename(path).lower()
     product = (
@@ -112,10 +112,16 @@ def ensure_index(dim: int):
 def ingest(pdf_path: str, customer: str, chunk_tokens: int, overlap: int,
            dry_run: bool, batch_embed: int = 100, batch_upsert: int = 100,
            *, progress_cb: Callable[[int], None]|None = None,
-           common_meta: Dict[str, Any]|None = None):
+           common_meta: Dict[str, Any]|None = None,
+           doc_id: str = ""):
     print("📖  Chunking …")
     chunks, metas = pdf_to_chunks(pdf_path, chunk_tokens, overlap)
     total = len(chunks)
+    if total == 0:
+        raise RuntimeError(f"No text extracted from {pdf_path}")
+    total_tokens = sum(token_len(c) for c in chunks)
+    print(f"🧠  {total} chunks, {total_tokens} tokens total")
+
     if dry_run:
         for i,(c,m) in enumerate(zip(chunks, metas)):
             print(f"[{i}] pg {m['page']} {token_len(c)} tokens\n{c[:120]}…")
@@ -136,7 +142,8 @@ def ingest(pdf_path: str, customer: str, chunk_tokens: int, overlap: int,
         (f"{customer}-{uuid.uuid4().hex[:8]}",
          vec,
          {**m, **meta_common, "customer":customer,
-          "chunk":i, "text":chunks[i], "tokens":token_len(chunks[i])})
+          "doc_id":doc_id, "chunk":i,
+          "text":chunks[i], "tokens":token_len(chunks[i])})
         for i,(vec,m) in enumerate(zip(vectors, metas))
     ]
     for j in range(0,len(items),batch_upsert):
@@ -154,8 +161,10 @@ if __name__ == "__main__":
     ap.add_argument("--dry_run", action="store_true")
     ap.add_argument("--batch_embed", type=int, default=100)
     ap.add_argument("--batch_upsert", type=int, default=100)
+    ap.add_argument("--doc_id", default="")  # ← NEW CLI option
     args = ap.parse_args()
 
     ingest(args.pdf, args.customer, args.chunk_tokens, args.overlap,
            args.dry_run, batch_embed=args.batch_embed,
-           batch_upsert=args.batch_upsert)
+           batch_upsert=args.batch_upsert,
+           doc_id=args.doc_id)

@@ -10,13 +10,13 @@ qa_demo.py – hybrid Q-and-A for AI-Manuals
 
 from __future__ import annotations
 import os, re, string, time
-from typing import Dict, List, Tuple
+from typing import Dict, List
 
 import dotenv
 import numpy as np
-from openai       import OpenAI
-from pinecone     import Pinecone, ServerlessSpec
-from rank_bm25    import BM25Okapi
+from openai import OpenAI
+from pinecone import Pinecone, ServerlessSpec
+from rank_bm25 import BM25Okapi
 from sklearn.metrics.pairwise import cosine_similarity
 
 # ───────── 1. CONFIG ─────────
@@ -56,31 +56,26 @@ else:
         raise RuntimeError("Pinecone dimension mismatch")
 idx = pc.Index(INDEX_NAME)
 
-_tokenize = re.compile(r"\w+").findall          # minimal word-tokeniser
+_tokenize = re.compile(r"\w+").findall
 
 def _norm(txt: str) -> str:
-    """Canonicalise a query (lower-case, trim, strip trailing punctuation)."""
     txt = txt.strip().lower()
     while txt and txt[-1] in string.punctuation:
         txt = txt[:-1]
     return txt
 
-# ───────── 3. HELPERS ─────────
 def _embed(text: str) -> List[float]:
     return openai.embeddings.create(model=EMBED_MODEL, input=text).data[0].embedding
 
-
 def mmr(matches, *, k: int, lam: float = .5):
-    if k >= len(matches):
-        return matches
-    vecs   = [m.values for m in matches]
-    sim    = cosine_similarity(vecs, vecs)
-    q_sim  = [m.score for m in matches]
-
+    if k >= len(matches): return matches
+    vecs = [m.values for m in matches]
+    sim = cosine_similarity(vecs, vecs)
+    q_sim = [m.score for m in matches]
     chosen, rest = [0], list(range(1, len(matches)))
     while len(chosen) < k and rest:
         scores = [lam*q_sim[i] - (1-lam)*sim[i][chosen].max() for i in rest]
-        best   = rest.pop(scores.index(max(scores)))
+        best = rest.pop(scores.index(max(scores)))
         chosen.append(best)
     return [matches[i] for i in chosen]
 
@@ -90,16 +85,15 @@ def chat(
     customer: str = "demo01",
     doc_type: str = "",
     doc_id: str = "",
-    top_k:    int = 60,
-    concise:  bool = False,
+    top_k: int = 60,
+    concise: bool = False,
     fallback: bool = True,
 ) -> Dict[str, object]:
 
     q_canon = _norm(question)
-
-    # 4-1 dense retrieval (now filtered by doc_id)
     q_vec = _embed(q_canon)
 
+    # ✅ Enforce manual-level filtering
     filter_by = {"customer": {"$eq": customer}}
     if doc_id:
         filter_by["doc_id"] = {"$eq": doc_id}
@@ -109,31 +103,28 @@ def chat(
         filter=filter_by,
         include_metadata=True, include_values=True,
     )
-    if not res.matches:
-        return {"answer":"Nothing found – retry in a few seconds.",
-                "chunks_used":[], "grounded":False, "confidence":0.0}
 
-    # 4-2 BM25
+    if not res.matches:
+        return {"answer": "Nothing found – retry in a few seconds.",
+                "chunks_used": [], "grounded": False, "confidence": 0.0}
+
     docs_tok = [_tokenize((m.metadata.get("text") or "").lower()) for m in res.matches]
-    bm25     = BM25Okapi(docs_tok)
+    bm25 = BM25Okapi(docs_tok)
     bm25_raw = np.asarray(bm25.get_scores(_tokenize(q_canon)), dtype=float)
     max_bm25 = bm25_raw.max() if bm25_raw.size else 0.0
     bm25_norm = (bm25_raw / max_bm25).tolist() if max_bm25 else bm25_raw.tolist()
 
-    # 4-3 hybrid score
     for m, b, e in zip(res.matches, bm25_norm, [m.score for m in res.matches]):
-        m.score = float(ALPHA*e + (1-ALPHA)*b)
+        m.score = float(ALPHA * e + (1 - ALPHA) * b)
 
-    # 4-4 safety + diversity
     safety, rest = [], []
     for m in res.matches:
         txt = (m.metadata.get("text") or "").lower()
         (safety if any(w in txt for w in SAFETY_WORDS) else rest).append(m)
     safety = safety[:6]
-    rest   = mmr(rest, k=max(0, MMR_KEEP-len(safety)), lam=.5)
+    rest = mmr(rest, k=max(0, MMR_KEEP - len(safety)), lam=.5)
     res.matches = safety + rest
 
-    # 4-5 soft boosts
     boosted, q_low = [], q_canon
     for m in res.matches:
         s = m.score
@@ -150,21 +141,21 @@ def chat(
         for i, m in enumerate(res.matches[:6]):
             print(f"  [{i}] {m.score:.4f} → {(m.metadata.get('text') or '')[:80]}…")
 
-    # 4-6 fallback
     if np.mean([m.score for m in res.matches[:2]]) < FALLBACK_CUT:
         if not fallback:
-            return {"answer":"Manual doesn’t cover this.",
-                    "chunks_used":[], "grounded":True, "confidence":0.0}
+            return {"answer": "Manual doesn’t cover this.",
+                    "chunks_used": [], "grounded": True, "confidence": 0.0}
         fb = openai.chat.completions.create(
             model=CHAT_MODEL,
-            messages=[{"role":"system","content":"You are a helpful assistant."},
-                      {"role":"user",  "content":question}],
+            messages=[
+                {"role": "system", "content": "You are a helpful assistant."},
+                {"role": "user", "content": question}
+            ],
             temperature=.3,
         ).choices[0].message.content.strip()
-        return {"answer":"(General guidance) "+fb,
-                "chunks_used":[], "grounded":False, "confidence":.4}
+        return {"answer": "(General guidance) " + fb,
+                "chunks_used": [], "grounded": False, "confidence": .4}
 
-    # 4-7 GPT rerank
     rerank_prompt = (
         "Pick the most relevant chunks.\n\nQUESTION:\n"
         f"{question}\n\nCHUNKS:\n" +
@@ -173,14 +164,13 @@ def chat(
     )
     keep = openai.chat.completions.create(
         model=CHAT_MODEL,
-        messages=[{"role":"user","content":rerank_prompt}],
+        messages=[{"role": "user", "content": rerank_prompt}],
         temperature=0,
     ).choices[0].message.content
     idx_keep = {int(x) for x in re.findall(r"\d+", keep)}
     sel = [m for i, m in enumerate(res.matches) if i in idx_keep][:RERANK_KEEP] \
           or res.matches[:RERANK_KEEP]
 
-    # 4-8 final answer
     context = "\n\n".join(
         f"[{i+1}] {m.metadata.get('text','')[:1500].strip()}"
         for i, m in enumerate(sel)
@@ -200,19 +190,18 @@ def chat(
     )
     answer = openai.chat.completions.create(
         model=CHAT_MODEL,
-        messages=[{"role":"system","content":sys_prompt},
-                  {"role":"user",  "content":user_prompt}],
+        messages=[{"role": "system", "content": sys_prompt},
+                  {"role": "user", "content": user_prompt}],
         temperature=0, max_tokens=450,
     ).choices[0].message.content.strip()
 
     return {
-        "answer":      answer,
+        "answer": answer,
         "chunks_used": [m.id for m in sel],
-        "grounded":    True,
-        "confidence":  float(sel[0].score),
+        "grounded": True,
+        "confidence": float(sel[0].score),
     }
 
-# ───────── 5. SMOKE TEST ─────────
 if __name__ == "__main__":
     for q in ["How do I drain the system?",
               "Does it support Modbus?",
