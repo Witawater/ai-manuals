@@ -1,4 +1,4 @@
-<!-- START OF FIXED index.html -->
+<!-- START OF FULLY FIXED index.html -->
 <!DOCTYPE html>
 <html lang="en">
 <head>
@@ -11,14 +11,14 @@
     .hide{display:none}
     #status{margin-top:10px;font-size:14px;color:#555}
   </style>
-  <meta name="api-key" content="abc123demo"> <!-- ← Replace with real key from DB -->
+  <meta name="api-key" content="abc123demo">
 </head>
 <body>
   <h2>Manual helper</h2>
 
   <h4>Upload a PDF</h4>
   <input type="file" id="pdf" />
-  <button onclick="upload()">Upload</button>
+  <button id="uploadBtn">Upload</button>
   <div id="status"></div>
 
   <h4>Ask a question</h4>
@@ -33,145 +33,150 @@
   </div>
 
 <script>
-// ────────── DOM refs ──────────
-const pdf      = document.getElementById('pdf');
-const nextBtn  = document.querySelector('button');
-const q        = document.getElementById('q');
-const askBtn   = document.getElementById('askBtn');
-const statusEl = document.getElementById('status');
-const answerEl = document.getElementById('answer');
+const pdf       = document.getElementById('pdf');
+const uploadBtn = document.getElementById('uploadBtn');
+const q         = document.getElementById('q');
+const askBtn    = document.getElementById('askBtn');
+const statusEl  = document.getElementById('status');
+const answerEl  = document.getElementById('answer');
 
-// ────────── globals ───────────
-const API_KEY   = document.querySelector('meta[name="api-key"]').content || "";
-const headers   = extra => ({ 'X-API-Key': API_KEY, ...extra });
-let DOC_ID      = "";
+const API_KEY = document.querySelector('meta[name="api-key"]').content || "";
+const headers = extra => ({ 'X-API-Key': API_KEY, ...extra });
+
+let DOC_ID = "";
 let USER_DOC_TYPE = "";
 let pollTimer, uploading = false;
 
-// ────────── 1) auto-upload on file pick ──────────
-pdf.onchange = () => {
-  if(uploading) return;
+uploadBtn.onclick = () => {
+  if (uploading) return;
   const file = pdf.files[0];
-  if(!file){ return; }
+  if (!file) {
+    alert("Please choose a PDF first.");
+    return;
+  }
 
   uploading = true;
-  statusEl.textContent = 'Waiting… (Press Upload)';
+  statusEl.textContent = "Uploading…";
   pdf.disabled = true;
+  uploadBtn.disabled = true;
 
-  const fd = new FormData(); fd.append('file', file);
+  const fd = new FormData();
+  fd.append("file", file);
 
-  fetch('/upload', {method:'POST', headers: headers(), body: fd})
+  fetch("/upload", { method: "POST", headers: headers(), body: fd })
     .then(r => r.json())
     .then(js => {
+      if (!js.doc_id) throw new Error("No doc_id returned.");
       DOC_ID = js.doc_id;
 
-      if(js.status === 'duplicate'){
-        statusEl.textContent = '✅ Manual already uploaded — ready to ask.';
-        showMetaForm();
-        q.disabled = false;
-        askBtn.disabled = false;
-        nextBtn.disabled = true;
-        uploading = false;
+      if (js.status === "duplicate") {
+        statusEl.textContent = "✅ Manual already uploaded — ready to ask.";
+        enableQAFlow();
         return;
       }
 
       pollTimer = setInterval(checkReady, 2000);
     })
     .catch(err => {
-      statusEl.textContent = '❌ upload failed';
-      alert(err);
+      console.error(err);
+      statusEl.textContent = "❌ Upload failed.";
+      uploading = false;
+      pdf.disabled = false;
+      uploadBtn.disabled = false;
     });
 };
 
-nextBtn.onclick = () => {
-  if(document.getElementById('metaForm')) return;
-  if(!pdf.files.length){ alert('First choose a PDF'); return; }
-  showMetaForm();
-  nextBtn.disabled = true;
-};
+async function checkReady() {
+  if (!DOC_ID) return;
 
-async function checkReady(){
-  if(!DOC_ID) return;
-  const job = await fetch(`/ingest/status?doc_id=${DOC_ID}`, {headers: headers()}).then(r=>r.json());
+  const job = await fetch(`/ingest/status?doc_id=${DOC_ID}`, { headers: headers() }).then(r => r.json());
   statusEl.textContent = `Embedded ${job.done}/${job.total} chunks…`;
-  if(job.ready){
+
+  if (job.ready) {
     clearInterval(pollTimer);
     uploading = false;
-    statusEl.textContent = '✅ Ready – press Ask';
-    askBtn.disabled = false;
+    statusEl.textContent = "✅ Ready – press Ask";
+    enableQAFlow();
   }
 }
 
-function showMetaForm(){
-  if(document.getElementById('metaForm')) return;
+function enableQAFlow() {
+  showMetaForm();
+  q.disabled = false;
+  askBtn.disabled = false;
+}
+
+function showMetaForm() {
+  if (document.getElementById("metaForm")) return;
   const html = `
     <div id="metaForm">
       <hr><b>What type of manual?</b><br>
-      <label><input type=radio name=dt value=software checked> Software</label>
-      <label><input type=radio name=dt value=hardware> Physical product</label>
-      <label><input type=radio name=dt value=service> Service</label><br>
-      Notes: <input id=notes size=40 placeholder="e.g. CNC mill">
+      <label><input type="radio" name="dt" value="software" checked> Software</label>
+      <label><input type="radio" name="dt" value="hardware"> Physical product</label>
+      <label><input type="radio" name="dt" value="service"> Service</label><br>
+      Notes: <input id="notes" size="40" placeholder="e.g. CNC mill">
       <button id="saveMeta">Save</button> <span id="metaStatus"></span>
     </div>`;
-  statusEl.insertAdjacentHTML('afterend', html);
-  document.getElementById('saveMeta').onclick = saveMeta;
+  statusEl.insertAdjacentHTML("afterend", html);
+  document.getElementById("saveMeta").onclick = saveMeta;
 }
 
-async function saveMeta(){
-  USER_DOC_TYPE = document.querySelector('input[name=dt]:checked').value;
-  const notes = document.getElementById('notes').value;
-  const fd = new FormData();
-  fd.append('doc_id', DOC_ID);
-  fd.append('doc_type', USER_DOC_TYPE);
-  fd.append('notes', notes);
+async function saveMeta() {
+  USER_DOC_TYPE = document.querySelector('input[name="dt"]:checked').value;
+  const notes = document.getElementById("notes").value;
 
-  await fetch('/upload/metadata', {method:'POST', headers: headers(), body: fd});
-  document.getElementById('metaStatus').textContent = '✔️ saved';
-  q.disabled = false;
+  const fd = new FormData();
+  fd.append("doc_id", DOC_ID);
+  fd.append("doc_type", USER_DOC_TYPE);
+  fd.append("notes", notes);
+
+  await fetch("/upload/metadata", { method: "POST", headers: headers(), body: fd });
+  document.getElementById("metaStatus").textContent = "✔️ saved";
 }
 
-async function ask(){
-  if(!q.value.trim()) return;
-  askBtn.disabled = true; answerEl.textContent = 'Thinking…';
+async function ask() {
+  if (!DOC_ID || !q.value.trim()) return;
+  askBtn.disabled = true;
+  answerEl.textContent = "Thinking…";
 
   const fd = new FormData();
-  fd.append('question', q.value);
-  fd.append('doc_type', USER_DOC_TYPE);
-  fd.append('doc_id', DOC_ID);
+  fd.append("question", q.value);
+  fd.append("doc_type", USER_DOC_TYPE);
+  fd.append("doc_id", DOC_ID);
 
-  const js = await fetch('/chat', {method:'POST', headers: headers(), body: fd}).then(r=>r.json());
+  const js = await fetch("/chat", { method: "POST", headers: headers(), body: fd }).then(r => r.json());
   answerEl.textContent = js.answer;
   askBtn.disabled = false;
 }
 </script>
 
-<!-- ────────── 6) QA Health chart ────────── -->
+<!-- ────────── QA Health chart ────────── -->
 <hr>
 <h4>QA Health (last 30 days)</h4>
 <canvas id="qaChart" height="120"></canvas>
 <script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.2/dist/chart.umd.min.js"></script>
 <script>
-async function drawChart(){
-  const data = await fetch('/metrics', {headers: headers()}).then(r=>r.json());
-  if(!data.length) return;
+async function drawChart() {
+  const data = await fetch("/metrics", { headers: headers() }).then(r => r.json());
+  if (!data.records || !data.records.length) return;
 
-  const labels = data.map(d=>d.day.slice(5));
-  const chunks = data.map(d=>d.avg_chunks);
-  const conf   = data.map(d=>d.avg_conf.toFixed(2));
+  const labels = data.records.map(d => d.timestamp.slice(5)); // MM-DD
+  const chunks = data.records.map(d => d.count);
+  const conf   = data.records.map(d => d.avg_conf.toFixed(2));
 
-  new Chart(document.getElementById('qaChart'), {
-    type: 'bar',
+  new Chart(document.getElementById("qaChart"), {
+    type: "bar",
     data: {
       labels,
       datasets: [
-        {label:'avg chunks', data:chunks},
-        {label:'avg conf', data:conf, type:'line', yAxisID:'y1'}
+        { label: "avg chunks", data: chunks },
+        { label: "avg conf", data: conf, type: "line", yAxisID: "y1" }
       ]
     },
-    options:{
-      scales:{
-        y:{beginAtZero:true},
-        y1:{position:'right', min:0, max:1}
+    options: {
+      scales: {
+        y: { beginAtZero: true },
+        y1: { position: "right", min: 0, max: 1 }
       }
     }
   });
@@ -180,4 +185,4 @@ drawChart();
 </script>
 </body>
 </html>
-<!-- END OF FIXED index.html -->
+<!-- END OF FULLY FIXED index.html -->
