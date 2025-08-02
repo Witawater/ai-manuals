@@ -10,13 +10,13 @@ from typing import Any, Dict
 
 from fastapi import (
     BackgroundTasks, Depends, FastAPI, File, Form,
-    UploadFile, HTTPException
+    UploadFile, HTTPException, Request
 )
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.staticfiles import StaticFiles
 from fastapi.responses import JSONResponse
 from pydantic import BaseModel
-from sqlalchemy import text
+from sqlalchemy import text, insert
 from sqlalchemy.exc import IntegrityError
 
 # ─── local modules ──────────────────────────────────────────
@@ -63,7 +63,7 @@ def _ingest_and_cleanup(path: str, customer: str, doc_id: str) -> None:
         try: os.remove(path)
         except FileNotFoundError: pass
 
-# ─── 1. Upload PDF (but do not ingest yet) ──────────────────
+# ─── 1. Upload PDF ──────────────────────────────────────────
 @app.post("/upload")
 async def upload_pdf(
     file: UploadFile = File(...),
@@ -191,7 +191,64 @@ def get_metrics():
                     })
     except FileNotFoundError:
         return {"error": "log file not found"}
-    return {"records": lines[-30:]}  # Last 30
+    return {"records": lines[-30:]}
+
+# ─── 6. Feedback route (new version) ───────────────────────
+@app.post("/feedback")
+async def log_feedback(
+    request: Request,
+    customer: str = Depends(require_api_key)
+):
+    payload = await request.form()
+
+    with engine.begin() as conn:
+        conn.execute(
+            text("""
+                INSERT INTO feedback (doc_id, question, answer, chunks, good)
+                VALUES (:d, :q, :a, :c, :g)
+            """),
+            {
+                "d": payload.get("doc_id"),
+                "q": payload.get("question", "")[:500],
+                "a": payload.get("answer", "")[:2000],
+                "c": payload.get("chunks", "")[:2000],
+                "g": payload.get("good") == "true"
+            }
+        )
+    return {"ok": True}
+
+# ─── 7. Feedback summary ────────────────────────────────────
+@app.get("/feedback/summary")
+def feedback_summary(
+    customer: str = Depends(require_api_key),
+    doc_id: str = ""
+):
+    where_clause = "WHERE customer = :c"
+    params = {"c": customer}
+
+    if doc_id:
+        where_clause += " AND doc_id = :d"
+        params["d"] = doc_id
+
+    with engine.begin() as conn:
+        rows = conn.execute(text(f"""
+            SELECT
+              to_char(created, 'YYYY-MM-DD') AS day,
+              COUNT(*) AS total,
+              SUM(CASE WHEN good THEN 1 ELSE 0 END) AS good,
+              SUM(CASE WHEN NOT good THEN 1 ELSE 0 END) AS bad
+            FROM feedback
+            {where_clause}
+            GROUP BY day
+            ORDER BY day DESC
+            LIMIT 30;
+        """), params).fetchall()
+
+    return {"records": [
+        {"day": r.day, "total": r.total, "good": r.good, "bad": r.bad}
+        for r in rows
+    ]}
+
 
 # ─── Frontend ───────────────────────────────────────────────
 app.mount("/", StaticFiles(directory="web", html=True), name="web")

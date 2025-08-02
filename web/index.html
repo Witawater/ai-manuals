@@ -1,4 +1,4 @@
-<!-- START OF FULLY FIXED index.html -->
+<!-- START OF UPDATED index.html WITH FEEDBACK -->
 <!DOCTYPE html>
 <html lang="en">
 <head>
@@ -26,7 +26,6 @@
   <button onclick="ask()" id="askBtn" disabled>Ask</button><br><br>
 
   <div id="answer"></div>
-
   <div id="fb" class="hide">
     <span class="fb" onclick="sendFeedback(1)">👍</span>
     <span class="fb" onclick="sendFeedback(-1)">👎</span>
@@ -39,6 +38,7 @@ const q         = document.getElementById('q');
 const askBtn    = document.getElementById('askBtn');
 const statusEl  = document.getElementById('status');
 const answerEl  = document.getElementById('answer');
+const fbDiv     = document.getElementById('fb');
 
 const API_KEY = document.querySelector('meta[name="api-key"]').content || "";
 const headers = extra => ({ 'X-API-Key': API_KEY, ...extra });
@@ -46,6 +46,10 @@ const headers = extra => ({ 'X-API-Key': API_KEY, ...extra });
 let DOC_ID = "";
 let USER_DOC_TYPE = "";
 let pollTimer, uploading = false;
+
+let lastQuestion = "";
+let lastAnswer = "";
+let lastChunks  = [];
 
 uploadBtn.onclick = () => {
   if (uploading) return;
@@ -69,9 +73,13 @@ uploadBtn.onclick = () => {
       if (!js.doc_id) throw new Error("No doc_id returned.");
       DOC_ID = js.doc_id;
 
+      showMetaForm();
+
       if (js.status === "duplicate") {
         statusEl.textContent = "✅ Manual already uploaded — ready to ask.";
-        enableQAFlow();
+        q.disabled = false;
+        askBtn.disabled = false;
+        uploading = false;
         return;
       }
 
@@ -96,14 +104,9 @@ async function checkReady() {
     clearInterval(pollTimer);
     uploading = false;
     statusEl.textContent = "✅ Ready – press Ask";
-    enableQAFlow();
+    q.disabled = false;
+    askBtn.disabled = false;
   }
-}
-
-function enableQAFlow() {
-  showMetaForm();
-  q.disabled = false;
-  askBtn.disabled = false;
 }
 
 function showMetaForm() {
@@ -122,6 +125,11 @@ function showMetaForm() {
 }
 
 async function saveMeta() {
+  if (!DOC_ID) {
+    alert("No doc ID yet — try reloading.");
+    return;
+  }
+
   USER_DOC_TYPE = document.querySelector('input[name="dt"]:checked').value;
   const notes = document.getElementById("notes").value;
 
@@ -138,6 +146,7 @@ async function ask() {
   if (!DOC_ID || !q.value.trim()) return;
   askBtn.disabled = true;
   answerEl.textContent = "Thinking…";
+  fbDiv.classList.add("hide");
 
   const fd = new FormData();
   fd.append("question", q.value);
@@ -145,12 +154,36 @@ async function ask() {
   fd.append("doc_id", DOC_ID);
 
   const js = await fetch("/chat", { method: "POST", headers: headers(), body: fd }).then(r => r.json());
+
   answerEl.textContent = js.answer;
   askBtn.disabled = false;
+  fbDiv.classList.remove("hide");
+
+  lastQuestion = q.value;
+  lastAnswer   = js.answer || "";
+  lastChunks   = js.chunks_used || [];
+}
+
+async function sendFeedback(good) {
+  const body = {
+    doc_id:   DOC_ID,
+    question: lastQuestion,
+    answer:   lastAnswer,
+    chunks:   lastChunks.join(","),
+    good:     good > 0,
+  };
+
+  await fetch("/feedback", {
+    method: "POST",
+    headers: headers({ "Content-Type": "application/json" }),
+    body: JSON.stringify(body),
+  });
+
+  fbDiv.classList.add("hide");
+  console.log("Feedback sent:", good > 0 ? "👍" : "👎");
 }
 </script>
 
-<!-- ────────── QA Health chart ────────── -->
 <hr>
 <h4>QA Health (last 30 days)</h4>
 <canvas id="qaChart" height="120"></canvas>
@@ -160,7 +193,7 @@ async function drawChart() {
   const data = await fetch("/metrics", { headers: headers() }).then(r => r.json());
   if (!data.records || !data.records.length) return;
 
-  const labels = data.records.map(d => d.timestamp.slice(5)); // MM-DD
+  const labels = data.records.map(d => d.timestamp.slice(5));
   const chunks = data.records.map(d => d.count);
   const conf   = data.records.map(d => d.avg_conf.toFixed(2));
 
@@ -185,4 +218,4 @@ drawChart();
 </script>
 </body>
 </html>
-<!-- END OF FULLY FIXED index.html -->
+<!-- END OF UPDATED index.html WITH FEEDBACK -->

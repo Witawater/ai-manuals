@@ -93,7 +93,6 @@ def chat(
     q_canon = _norm(question)
     q_vec = _embed(q_canon)
 
-    # ✅ Enforce manual-level filtering
     filter_by = {"customer": {"$eq": customer}}
     if doc_id:
         filter_by["doc_id"] = {"$eq": doc_id}
@@ -105,6 +104,7 @@ def chat(
     )
 
     if not res.matches:
+        print(f"❌ No match – q='{question}' cid='{customer}' doc='{doc_id}'")
         return {"answer": "Nothing found – retry in a few seconds.",
                 "chunks_used": [], "grounded": False, "confidence": 0.0}
 
@@ -153,6 +153,7 @@ def chat(
             ],
             temperature=.3,
         ).choices[0].message.content.strip()
+        print(f"⚠️ Fallback – q='{question}' cid='{customer}' doc='{doc_id}'")
         return {"answer": "(General guidance) " + fb,
                 "chunks_used": [], "grounded": False, "confidence": .4}
 
