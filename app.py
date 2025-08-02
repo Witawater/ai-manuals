@@ -15,8 +15,7 @@ from fastapi import (
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.staticfiles import StaticFiles
 from fastapi.responses import JSONResponse
-from pydantic import BaseModel
-from sqlalchemy import text, insert
+from sqlalchemy import text
 from sqlalchemy.exc import IntegrityError
 
 # ─── local modules ──────────────────────────────────────────
@@ -33,6 +32,7 @@ INDEX_NAME   = os.getenv("PINECONE_INDEX",   "manuals-large")
 LOG_PATH = pathlib.Path("/mnt/data/manual_eval.log")
 JOBS: Dict[str, Dict[str, Any]] = {}
 
+# ─── FastAPI setup ──────────────────────────────────────────
 app = FastAPI()
 app.add_middleware(
     CORSMiddleware,
@@ -43,25 +43,6 @@ app.add_middleware(
     allow_methods=["*"],
     allow_headers=["*"],
 )
-
-# ─── Ingestion worker ───────────────────────────────────────
-def _ingest_and_cleanup(path: str, customer: str, doc_id: str) -> None:
-    def _progress(done: int):
-        if doc_id in JOBS:
-            JOBS[doc_id]["done"] = done
-    try:
-        ingest(path, customer, CHUNK_TOKENS, OVERLAP,
-               dry_run=False, progress_cb=_progress,
-               common_meta=JOBS[doc_id].get("meta", {}),
-               doc_id=doc_id)
-        JOBS[doc_id]["ready"] = True
-        print("✅ ingest complete", path)
-    except Exception as exc:
-        JOBS.setdefault(doc_id, {})["error"] = str(exc)
-        print("🛑 ingest failed", exc)
-    finally:
-        try: os.remove(path)
-        except FileNotFoundError: pass
 
 # ─── 1. Upload PDF ──────────────────────────────────────────
 @app.post("/upload")
@@ -151,13 +132,32 @@ def save_meta(
 
     return {"ok": True}
 
-# ─── 3. Ingest status ───────────────────────────────────────
+# ─── 3. Ingestion worker ─────────────────────────────────────
+def _ingest_and_cleanup(path: str, customer: str, doc_id: str) -> None:
+    def _progress(done: int):
+        if doc_id in JOBS:
+            JOBS[doc_id]["done"] = done
+    try:
+        ingest(path, customer, CHUNK_TOKENS, OVERLAP,
+               dry_run=False, progress_cb=_progress,
+               common_meta=JOBS[doc_id].get("meta", {}),
+               doc_id=doc_id)
+        JOBS[doc_id]["ready"] = True
+        print("✅ ingest complete", path)
+    except Exception as exc:
+        JOBS.setdefault(doc_id, {})["error"] = str(exc)
+        print("🛑 ingest failed", exc)
+    finally:
+        try: os.remove(path)
+        except FileNotFoundError: pass
+
+# ─── 4. Ingest status ───────────────────────────────────────
 @app.get("/ingest/status")
 def ingest_status(doc_id: str, customer: str = Depends(require_api_key)):
     job = JOBS.get(doc_id) or HTTPException(404, "doc_id not found")
     return job
 
-# ─── 4. Chat route ──────────────────────────────────────────
+# ─── 5. Ask question ─────────────────────────────────────────
 @app.post("/chat")
 async def ask(
     question: str = Form(...),
@@ -170,7 +170,7 @@ async def ask(
         print("⚠️ fallback (ungrounded)")
     return res
 
-# ─── 5. QA Metrics ──────────────────────────────────────────
+# ─── 6. QA metrics file (/metrics) ──────────────────────────
 @app.get("/metrics")
 def get_metrics():
     lines = []
@@ -193,7 +193,7 @@ def get_metrics():
         return {"error": "log file not found"}
     return {"records": lines[-30:]}
 
-# ─── 6. Feedback route (new version) ───────────────────────
+# ─── 7. Feedback route ──────────────────────────────────────
 @app.post("/feedback")
 async def log_feedback(
     request: Request,
@@ -217,7 +217,7 @@ async def log_feedback(
         )
     return {"ok": True}
 
-# ─── 7. Feedback summary ────────────────────────────────────
+# ─── 8. Feedback summary route ──────────────────────────────
 @app.get("/feedback/summary")
 def feedback_summary(
     customer: str = Depends(require_api_key),
@@ -225,7 +225,6 @@ def feedback_summary(
 ):
     where_clause = "WHERE customer = :c"
     params = {"c": customer}
-
     if doc_id:
         where_clause += " AND doc_id = :d"
         params["d"] = doc_id
@@ -249,6 +248,46 @@ def feedback_summary(
         for r in rows
     ]}
 
+# ─── 9. Chunk quality voting data ───────────────────────────
+@app.get("/feedback/chunks")
+def chunk_quality(
+    days: int = 30,
+    min_votes: int = 1,
+    limit: int = 30,
+    doc_id: str = "",
+    customer: str = Depends(require_api_key)
+):
+    where_clause = "WHERE f.customer = :c AND f.created >= NOW() - INTERVAL ':d days'"
+    params = {"c": customer, "d": days}
+    if doc_id:
+        where_clause += " AND f.doc_id = :doc"
+        params["doc"] = doc_id
 
-# ─── Frontend ───────────────────────────────────────────────
+    with engine.begin() as conn:
+        rows = conn.execute(text(f"""
+            SELECT
+              chunk_id,
+              SUM(CASE WHEN good THEN 1 ELSE 0 END) AS up,
+              SUM(CASE WHEN NOT good THEN 1 ELSE 0 END) AS down,
+              COUNT(*) AS total
+            FROM (
+              SELECT unnest(string_to_array(chunks, ',')) AS chunk_id, good
+              FROM feedback f
+              {where_clause}
+            ) AS sub
+            GROUP BY chunk_id
+            HAVING COUNT(*) >= :min
+            ORDER BY total DESC
+            LIMIT :lim
+        """), {**params, "min": min_votes, "lim": limit}).fetchall()
+
+    return [{
+        "chunk_id": r.chunk_id,
+        "up": r.up,
+        "down": r.down,
+        "total": r.total,
+        "up_pct": round(100 * r.up / r.total) if r.total else 0
+    } for r in rows]
+
+# ─── 10. Serve frontend ─────────────────────────────────────
 app.mount("/", StaticFiles(directory="web", html=True), name="web")

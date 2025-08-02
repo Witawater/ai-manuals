@@ -10,8 +10,6 @@
     h2{margin-bottom:6px}
     button.tab{margin-right:8px;padding:6px 12px;cursor:pointer}
     .hidden{display:none}
-
-    /* table for chunks */
     table{border-collapse:collapse;width:100%;margin-top:24px}
     th,td{border:1px solid #ccc;padding:6px;text-align:center}
     th{background:#f4f4f4}
@@ -29,15 +27,18 @@
 <section id="daily">
   Days:
   <input id="days" type="number" min="1" max="30" value="7" oninput="loadDaily()">
+  Doc ID:
+  <input id="docid" placeholder="(optional)" size="30" oninput="loadDaily()">
   <canvas id="trend" height="280"></canvas>
 </section>
 
 <!-- ───────── Chunk quality section ───────── -->
 <section id="chunks" class="hidden">
   <div id="opts">
-    Days <input id="c_days"   type="number" min="1"  max="60" value="30">
-    Min votes <input id="c_mv" type="number" min="1"          value="1">
-    Limit <input id="c_lim"   type="number" min="1"          value="30">
+    Days <input id="c_days" type="number" min="1" max="60" value="30">
+    Min votes <input id="c_mv" type="number" min="1" value="1">
+    Limit <input id="c_lim" type="number" min="1" value="30">
+    Doc ID: <input id="c_docid" size="30" placeholder="(optional)">
     <button onclick="loadChunks()">↻ Refresh</button>
   </div>
 
@@ -53,12 +54,10 @@
 
 <script>
 const API_KEY = document.querySelector('meta[name="api-key"]')?.content || "";
-
-/* helper */
 function authHeaders(extra = {}) {
   return { "X-API-Key": API_KEY, ...extra };
 }
-/* ---------- tab toggling ---------- */
+
 function show(id){
   document.getElementById('daily').classList.toggle('hidden', id!=='daily');
   document.getElementById('chunks').classList.toggle('hidden', id!=='chunks');
@@ -67,58 +66,76 @@ function show(id){
 /* ---------- daily trend ---------- */
 let trendChart;
 async function loadDaily(){
-  const days=document.getElementById('days').value||7;
-  const data=await fetch(`/feedback/summary?days=${days}`, {
+  const days = document.getElementById('days').value || 7;
+  const docid = document.getElementById('docid').value || "";
+
+  const data = await fetch(`/feedback/summary?days=${days}&doc_id=${encodeURIComponent(docid)}`, {
     headers: authHeaders()
-  }).then(r=>r.json());
+  }).then(r=>r.json()).then(r => r.records || []);
 
-  const labels=data.map(d=>d.day);
-  const ups   =data.map(d=>d.up);
-  const downs =data.map(d=>d.down);
+  const labels = data.map(d => d.day);
+  const ups    = data.map(d => d.good);
+  const downs  = data.map(d => d.bad);
 
-  if(trendChart){
-    trendChart.data.labels=labels;
-    trendChart.data.datasets[0].data=ups;
-    trendChart.data.datasets[1].data=downs;
+  if (trendChart){
+    trendChart.data.labels = labels;
+    trendChart.data.datasets[0].data = ups;
+    trendChart.data.datasets[1].data = downs;
     return trendChart.update();
   }
-  trendChart=new Chart(document.getElementById('trend'),{
-    type:'bar',
-    data:{labels,datasets:[
-      {label:'👍',data:ups,  stack:'s',order:1},
-      {label:'👎',data:downs,stack:'s',order:2}
-    ]},
-    options:{scales:{x:{stacked:true},y:{beginAtZero:true,stacked:true}}}
+
+  trendChart = new Chart(document.getElementById('trend'), {
+    type: 'bar',
+    data: {
+      labels,
+      datasets: [
+        { label: '👍', data: ups,  stack: 's', order: 1 },
+        { label: '👎', data: downs, stack: 's', order: 2 }
+      ]
+    },
+    options: {
+      scales: {
+        x: { stacked: true },
+        y: { beginAtZero: true, stacked: true }
+      }
+    }
   });
 }
 
 /* ---------- chunk quality ---------- */
 let chunkChart;
 async function loadChunks(){
-  const qs=id=>document.getElementById(id).value;
-  const url=`/feedback/chunks?days=${qs('c_days')}&min_votes=${qs('c_mv')}&limit=${qs('c_lim')}`;
-  const data=await fetch(url, {
-    headers: authHeaders()
-  }).then(r=>r.json());
+  const days  = document.getElementById('c_days').value || 30;
+  const min   = document.getElementById('c_mv').value || 1;
+  const limit = document.getElementById('c_lim').value || 30;
+  const docid = document.getElementById('c_docid').value || "";
 
-  const labels=data.map(x=>x.chunk_id.slice(-6));
-  const pct   =data.map(x=>x.up_pct);
-  if(chunkChart){
-    chunkChart.data.labels=labels;
-    chunkChart.data.datasets[0].data=pct;
+  const url = `/feedback/chunks?days=${days}&min_votes=${min}&limit=${limit}&doc_id=${encodeURIComponent(docid)}`;
+  const data = await fetch(url, { headers: authHeaders() }).then(r => r.json());
+
+  const labels = data.map(x => x.chunk_id.slice(-6));
+  const pct    = data.map(x => x.up_pct);
+
+  if (chunkChart){
+    chunkChart.data.labels = labels;
+    chunkChart.data.datasets[0].data = pct;
     chunkChart.update();
-  }else{
-    chunkChart=new Chart(document.getElementById('c_chart'),{
-      type:'bar',
-      data:{labels,datasets:[{label:'% 👍',data:pct}]},
-      options:{scales:{y:{beginAtZero:true,max:100}}}
+  } else {
+    chunkChart = new Chart(document.getElementById('c_chart'), {
+      type: 'bar',
+      data: {
+        labels,
+        datasets: [{ label: '% 👍', data: pct }]
+      },
+      options: { scales: { y: { beginAtZero: true, max: 100 } } }
     });
   }
 
-  const rows=document.getElementById('c_rows'); rows.innerHTML="";
-  data.forEach(x=>{
+  const rows = document.getElementById('c_rows');
+  rows.innerHTML = "";
+  data.forEach(x => {
     rows.insertAdjacentHTML('beforeend',
-      `<tr><td>${x.chunk_id}</td><td>${x.up}</td><td>${x.down}`+
+      `<tr><td>${x.chunk_id}</td><td>${x.up}</td><td>${x.down}` +
       `</td><td>${x.total}</td><td>${x.up_pct}%</td></tr>`);
   });
 }
