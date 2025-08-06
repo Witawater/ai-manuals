@@ -1,34 +1,40 @@
+# ─── Virtual Environments ────────────────
 venv/
-__pycache__/
-.env
+.venv/
 
-# Python virtual environment
-venv/
-
-# Bytecode and cache
+# ─── Python Bytecode & Caches ────────────
 __pycache__/
 *.py[cod]
 
-# Environment variables
+# ─── Environment Files ───────────────────
 .env
+.env.production
+vault_key.txt
 
-# Logs
+# ─── Log Files ───────────────────────────
 *.log
 
-# macOS system files
+# ─── macOS System Files ──────────────────
 .DS_Store
 
-# VSCode settings
+# ─── Editor Settings ─────────────────────
 .vscode/
 
-# PDF and output artifacts
+# ─── PDF & Output Files ──────────────────
 *.pdf
 *.db
 *.sqlite3
 
-# Build artifacts
+# ─── Build Artifacts ─────────────────────
 dist/
-*.egg-info/vault_key.txt
-vault_key.txt
-.env.production
-.env.production
+*.egg-info/
+
+# ─── Local Scripts (exclude from prod) ───
+check_*.py
+debug_key.py
+extract_*.py
+fix_sections_table.py
+init_*.py
+insert_api_key.py
+list_docs.py
+patch_*.py
