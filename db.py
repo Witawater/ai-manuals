@@ -14,6 +14,9 @@ from __future__ import annotations
 
 import os
 from sqlalchemy import create_engine, text
+from dotenv import load_dotenv
+
+load_dotenv()  # ✅ Ensure DATABASE_URL loads from .env even in CLI runs
 
 # ───────────────────────── 1. DB connection ──────────────────────────
 DATABASE_URL: str | None = os.getenv("DATABASE_URL")

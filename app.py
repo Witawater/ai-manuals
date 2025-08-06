@@ -289,5 +289,24 @@ def chunk_quality(
         "up_pct": round(100 * r.up / r.total) if r.total else 0
     } for r in rows]
 
-# ─── 10. Serve frontend ─────────────────────────────────────
+# ─── 10. Section summaries API (must come before app.mount) ──
+@app.get("/manual/{doc_id}/sections")
+def get_section_summaries(
+    doc_id: str,
+    customer: str = Depends(require_api_key)
+):
+    with engine.begin() as conn:
+        rows = conn.execute(text("""
+            SELECT o.title AS heading, s.summary
+            FROM manual_sections s
+            JOIN manual_outline o ON s.outline_id = o.id
+            WHERE s.doc_id = :doc AND o.customer = :cust
+            ORDER BY o.sort_order
+        """), {"doc": doc_id, "cust": customer}).fetchall()
+
+    return {"sections": [
+        {"heading": r.heading, "summary": r.summary} for r in rows
+    ]}
+
+# ─── 11. Serve frontend (keep at bottom) ─────────────────────
 app.mount("/", StaticFiles(directory="web", html=True), name="web")
