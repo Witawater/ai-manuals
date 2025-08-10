@@ -1,0 +1,23 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+BLOCK_REGEX='^(.env(\..*)?$|vault_key\.txt)$'
+ALLOW_REGEX='^\.env\.production\.enc$'
+bad=()
+while IFS= read -r f; do
+  # allow the encrypted file
+  [[ "$f" =~ $ALLOW_REGEX ]] && continue
+  # block anything matching BLOCK_REGEX
+  if [[ "$f" =~ $BLOCK_REGEX ]]; then
+    bad+=("$f")
+  fi
+done < <(git diff --cached --name-only)
+
+if (( ${#bad[@]} )); then
+  echo "❌ Blocked: refusing to commit plaintext env/keys:"
+  printf '  - %s\n' "${bad[@]}"
+  echo "Only .env.production.enc is allowed. Remove from stage or rename."
+  echo "Tip: keep secrets in .env (gitignored) and encrypt to .env.production.enc."
+  exit 1
+fi
+exit 0
