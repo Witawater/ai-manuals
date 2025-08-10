@@ -39,3 +39,6 @@ insert_api_key.py
 list_docs.py
 patch_*.py
 .env.production.save
+
+.env.production.save
+*.save

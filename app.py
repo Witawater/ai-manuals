@@ -6,7 +6,7 @@ FastAPI service for AI-Manuals
 
 from __future__ import annotations
 import os, tempfile, uuid, pathlib, hashlib
-from typing import Any, Dict
+from typing import Any, Dict, Optional
 
 from fastapi import (
     BackgroundTasks, Depends, FastAPI, File, Form,
@@ -23,6 +23,13 @@ from ingest_manual import ingest, pdf_to_chunks
 from qa_demo       import chat
 from auth          import require_api_key
 from db            import engine
+
+# Optional: single-section regenerate helper (if present)
+try:
+    # expected signature: regenerate_section_summary(section_id: str, customer: str) -> None
+    from extract_sections import regenerate_section_summary  # type: ignore
+except Exception:
+    regenerate_section_summary = None  # fallback path will be used
 
 # ─── config ────────────────────────────────────────────────
 CHUNK_TOKENS = int(os.getenv("CHUNK_TOKENS", "400"))
@@ -154,7 +161,9 @@ def _ingest_and_cleanup(path: str, customer: str, doc_id: str) -> None:
 # ─── 4. Ingest status ───────────────────────────────────────
 @app.get("/ingest/status")
 def ingest_status(doc_id: str, customer: str = Depends(require_api_key)):
-    job = JOBS.get(doc_id) or HTTPException(404, "doc_id not found")
+    job = JOBS.get(doc_id)
+    if not job:
+        raise HTTPException(404, "doc_id not found")
     return job
 
 # ─── 5. Ask question ─────────────────────────────────────────
@@ -199,20 +208,40 @@ async def log_feedback(
     request: Request,
     customer: str = Depends(require_api_key)
 ):
-    payload = await request.form()
+    # Accept JSON or form payloads
+    content_type = request.headers.get("content-type", "")
+    if "application/json" in content_type:
+        payload = await request.json()
+    else:
+        payload = await request.form()
+
+    def _get(key: str, default=""):
+        val = payload.get(key, default)
+        # starlette FormData returns lists sometimes; normalize
+        if isinstance(val, (list, tuple)):
+            val = val[0] if val else default
+        return val
+
+    good_raw = payload.get("good", False)
+    # normalize truthy values across json/form
+    good_val = (
+        bool(good_raw) if isinstance(good_raw, bool)
+        else str(good_raw).lower() in ("true", "1", "yes", "y")
+    )
 
     with engine.begin() as conn:
         conn.execute(
             text("""
-                INSERT INTO feedback (doc_id, question, answer, chunks, good)
-                VALUES (:d, :q, :a, :c, :g)
+                INSERT INTO feedback (doc_id, question, answer, chunks, good, customer)
+                VALUES (:d, :q, :a, :c, :g, :cust)
             """),
             {
-                "d": payload.get("doc_id"),
-                "q": payload.get("question", "")[:500],
-                "a": payload.get("answer", "")[:2000],
-                "c": payload.get("chunks", "")[:2000],
-                "g": payload.get("good") == "true"
+                "d": _get("doc_id") or "",
+                "q": (_get("question") or "")[:500],
+                "a": (_get("answer") or "")[:2000],
+                "c": (_get("chunks") or "")[:2000],
+                "g": good_val,
+                "cust": customer,
             }
         )
     return {"ok": True}
@@ -221,13 +250,15 @@ async def log_feedback(
 @app.get("/feedback/summary")
 def feedback_summary(
     customer: str = Depends(require_api_key),
-    doc_id: str = ""
+    doc_id: str = "",
+    days: int = 7,
 ):
-    where_clause = "WHERE customer = :c"
-    params = {"c": customer}
+    where_parts = ["customer = :c", "created >= NOW() - (:days || ' days')::interval"]
+    params = {"c": customer, "days": days}
     if doc_id:
-        where_clause += " AND doc_id = :d"
+        where_parts.append("doc_id = :d")
         params["d"] = doc_id
+    where_clause = " WHERE " + " AND ".join(where_parts)
 
     with engine.begin() as conn:
         rows = conn.execute(text(f"""
@@ -257,13 +288,16 @@ def chunk_quality(
     doc_id: str = "",
     customer: str = Depends(require_api_key)
 ):
-    where_clause = "WHERE f.customer = :c AND f.created >= NOW() - INTERVAL ':d days'"
-    params = {"c": customer, "d": days}
-    if doc_id:
-        where_clause += " AND f.doc_id = :doc"
-        params["doc"] = doc_id
-
+    # use bound parameters; avoid putting :d into INTERVAL literal directly
     with engine.begin() as conn:
+        # Build WHERE dynamically and pass params safely
+        where_parts = ["f.customer = :c", "f.created >= NOW() - (:days || ' days')::interval"]
+        params = {"c": customer, "days": days}
+        if doc_id:
+            where_parts.append("f.doc_id = :doc")
+            params["doc"] = doc_id
+        where_clause = " WHERE " + " AND ".join(where_parts)
+
         rows = conn.execute(text(f"""
             SELECT
               chunk_id,
@@ -297,7 +331,7 @@ def get_section_summaries(
 ):
     with engine.begin() as conn:
         rows = conn.execute(text("""
-            SELECT o.title AS heading, s.summary
+            SELECT s.id AS section_id, o.title AS heading, s.summary
             FROM manual_sections s
             JOIN manual_outline o ON s.outline_id = o.id
             WHERE s.doc_id = :doc AND o.customer = :cust
@@ -305,8 +339,120 @@ def get_section_summaries(
         """), {"doc": doc_id, "cust": customer}).fetchall()
 
     return {"sections": [
-        {"heading": r.heading, "summary": r.summary} for r in rows
+        {"section_id": r.section_id, "heading": r.heading, "summary": r.summary} for r in rows
     ]}
+
+# ─── 10b. Outline API (new) ─────────────────────────────────
+@app.get("/manual/{doc_id}/outline")
+def get_outline(
+    doc_id: str,
+    customer: str = Depends(require_api_key)
+):
+    with engine.begin() as conn:
+        rows = conn.execute(text("""
+            SELECT id, title, sort_order
+            FROM manual_outline
+            WHERE doc_id = :doc AND customer = :cust
+            ORDER BY sort_order
+        """), {"doc": doc_id, "cust": customer}).fetchall()
+
+    return {"outline": [
+        {"id": r.id, "title": r.title, "sort_order": r.sort_order} for r in rows
+    ]}
+
+# ─── 10c. Flag / Unflag a section (new) ─────────────────────
+@app.post("/manual/{doc_id}/sections/{section_id}/flag")
+async def flag_section(
+    doc_id: str,
+    section_id: str,
+    action: str = Form("flag"),                 # "flag" | "unflag"
+    reason: str = Form(""),
+    customer: str = Depends(require_api_key)
+):
+    action = action.lower().strip()
+    if action not in ("flag", "unflag"):
+        raise HTTPException(400, "action must be 'flag' or 'unflag'")
+
+    with engine.begin() as conn:
+        # Ensure section belongs to this doc+customer
+        owned = conn.execute(text("""
+            SELECT 1
+            FROM manual_sections s
+            JOIN manual_outline o ON s.outline_id = o.id
+            WHERE s.id = :sid AND s.doc_id = :doc AND o.customer = :cust
+            LIMIT 1
+        """), {"sid": section_id, "doc": doc_id, "cust": customer}).fetchone()
+        if not owned:
+            raise HTTPException(404, "section not found for this document/customer")
+
+        if action == "flag":
+            # record or update flag row
+            conn.execute(text("""
+                INSERT INTO manual_section_flags (section_id, doc_id, customer, reason)
+                VALUES (:sid, :doc, :cust, :r)
+                ON CONFLICT (section_id, customer)
+                DO UPDATE SET reason = EXCLUDED.reason, updated = NOW()
+            """), {"sid": section_id, "doc": doc_id, "cust": customer, "r": reason[:500]})
+            # optional hint for regen pipeline
+            conn.execute(text("""
+                UPDATE manual_sections SET needs_regen = TRUE WHERE id = :sid
+            """), {"sid": section_id})
+            return {"ok": True, "status": "flagged"}
+        else:
+            conn.execute(text("""
+                DELETE FROM manual_section_flags WHERE section_id = :sid AND customer = :cust
+            """), {"sid": section_id, "cust": customer})
+            conn.execute(text("""
+                UPDATE manual_sections SET needs_regen = COALESCE(needs_regen, FALSE) AND FALSE WHERE id = :sid
+            """), {"sid": section_id})
+            return {"ok": True, "status": "unflagged"}
+
+# ─── 10d. Regenerate a section summary (new) ────────────────
+@app.post("/manual/{doc_id}/sections/{section_id}/regenerate")
+async def regenerate_section(
+    background_tasks: BackgroundTasks,
+    doc_id: str,
+    section_id: str,
+    customer: str = Depends(require_api_key)
+):
+    # Verify access/ownership
+    with engine.begin() as conn:
+        row = conn.execute(text("""
+            SELECT s.id
+            FROM manual_sections s
+            JOIN manual_outline o ON s.outline_id = o.id
+            WHERE s.id = :sid AND s.doc_id = :doc AND o.customer = :cust
+            LIMIT 1
+        """), {"sid": section_id, "doc": doc_id, "cust": customer}).fetchone()
+        if not row:
+            raise HTTPException(404, "section not found for this document/customer")
+
+    def _do_regen(section_id: str, customer: str) -> None:
+        try:
+            if callable(regenerate_section_summary):
+                regenerate_section_summary(section_id, customer)  # writes into manual_sections.summary
+                print(f"♻️ regenerated summary for section {section_id}")
+            else:
+                # fallback: mark for later and exit
+                with engine.begin() as conn:
+                    conn.execute(text("""
+                        UPDATE manual_sections
+                        SET needs_regen = TRUE, summary = NULL
+                        WHERE id = :sid
+                    """), {"sid": section_id})
+                print(f"⚠️ regenerate helper not available; marked section {section_id} for batch regen")
+        except Exception as e:
+            print("🛑 regenerate failed:", e)
+            # keep the flag; a later batch can retry
+            with engine.begin() as conn:
+                conn.execute(text("""
+                    UPDATE manual_sections
+                    SET needs_regen = TRUE
+                    WHERE id = :sid
+                """), {"sid": section_id})
+
+    background_tasks.add_task(_do_regen, section_id, customer)
+    return {"ok": True, "status": "queued"}
 
 # ─── 11. Serve frontend (keep at bottom) ─────────────────────
 app.mount("/", StaticFiles(directory="web", html=True), name="web")

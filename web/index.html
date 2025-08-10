@@ -41,7 +41,7 @@ const answerEl  = document.getElementById('answer');
 const fbDiv     = document.getElementById('fb');
 
 const API_KEY = document.querySelector('meta[name="api-key"]').content || "";
-const headers = extra => ({ 'X-API-Key': API_KEY, ...extra });
+const headers = extra => ({ 'x-api-key': API_KEY, ...extra });
 
 let DOC_ID = "";
 let USER_DOC_TYPE = "";
