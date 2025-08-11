@@ -1,16 +1,18 @@
-from fastapi import Header, HTTPException, Request
+from fastapi import Header, HTTPException
 from sqlalchemy import text
 from db import engine
 
 # Optional: track usage
 TRACK_USAGE = False
 
-def require_api_key(X-API-Key: str = Header(...)):
+def require_api_key(x_api_key: str = Header(..., alias="X-API-Key")):
     with engine.begin() as conn:
         row = conn.execute(
-            text("""SELECT customer, quota, used FROM api_keys
-                    WHERE key = :k"""),
-            {"k": X-API-Key}
+            text("""
+                SELECT customer, quota, used FROM api_keys
+                WHERE key = :k
+            """),
+            {"k": x_api_key}
         ).fetchone()
 
         if not row:
@@ -23,7 +25,7 @@ def require_api_key(X-API-Key: str = Header(...)):
                 raise HTTPException(status_code=429, detail="Quota exceeded")
             conn.execute(
                 text("UPDATE api_keys SET used = used + 1 WHERE key = :k"),
-                {"k": X-API-Key}
+                {"k": x_api_key}
             )
 
-        return customer  # returned to FastAPI dependency injection
+        return customer  # Returned to FastAPI dependency injection
