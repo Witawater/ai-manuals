@@ -5,12 +5,12 @@ from db import engine
 # Optional: track usage
 TRACK_USAGE = False
 
-def require_api_key(x_api_key: str = Header(...)):
+def require_api_key(X-API-Key: str = Header(...)):
     with engine.begin() as conn:
         row = conn.execute(
             text("""SELECT customer, quota, used FROM api_keys
                     WHERE key = :k"""),
-            {"k": x_api_key}
+            {"k": X-API-Key}
         ).fetchone()
 
         if not row:
@@ -23,7 +23,7 @@ def require_api_key(x_api_key: str = Header(...)):
                 raise HTTPException(status_code=429, detail="Quota exceeded")
             conn.execute(
                 text("UPDATE api_keys SET used = used + 1 WHERE key = :k"),
-                {"k": x_api_key}
+                {"k": X-API-Key}
             )
 
         return customer  # returned to FastAPI dependency injection

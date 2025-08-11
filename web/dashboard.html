@@ -57,7 +57,7 @@
 <script>
 const API_KEY = document.querySelector('meta[name="api-key"]')?.content || "";
 function authHeaders(extra = {}) {
-  return { "x-api-key": API_KEY, ...extra };
+  return { "X-API-Key": API_KEY, ...extra };
 }
 
 function show(id) {
