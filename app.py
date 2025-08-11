@@ -6,7 +6,7 @@ FastAPI service for AI-Manuals
 
 from __future__ import annotations
 import os, tempfile, uuid, pathlib, hashlib
-from typing import Any, Dict, Optional
+from typing import Any, Dict, Optional, Iterable
 
 from fastapi import (
     BackgroundTasks, Depends, FastAPI, File, Form,
@@ -41,15 +41,33 @@ JOBS: Dict[str, Dict[str, Any]] = {}
 
 # ─── FastAPI setup ──────────────────────────────────────────
 app = FastAPI()
+_allow_origins = os.getenv(
+    "CORS_ALLOW_ORIGINS",
+    "https://ai-manuals.onrender.com,http://localhost:5173,http://127.0.0.1:5173",
+).split(",")
+
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=os.getenv(
-        "CORS_ALLOW_ORIGINS",
-        "https://ai-manuals.onrender.com,http://localhost:5173,http://127.0.0.1:5173",
-    ).split(","),
+    allow_origins=[o.strip() for o in _allow_origins if o.strip()],
     allow_methods=["*"],
-    allow_headers=["*"],
+    allow_headers=["Content-Type", "X-API-Key"],
+    allow_credentials=True,  # ✅ needed for cookies/credentials
 )
+
+# ─── helpers ────────────────────────────────────────────────
+def _chunks_to_csv(val: Any) -> str:
+    """Normalize `chunks` to a comma-separated string (DB stores TEXT)."""
+    if val is None:
+        return ""
+    if isinstance(val, str):
+        return val[:2000]
+    if isinstance(val, Iterable):
+        try:
+            s = ",".join(str(x) for x in val)
+            return s[:2000]
+        except Exception:
+            return ""
+    return str(val)[:2000]
 
 # ─── 1. Upload PDF ──────────────────────────────────────────
 @app.post("/upload")
@@ -66,6 +84,7 @@ async def upload_pdf(
             size += len(chunk)
     file_hash = sha.hexdigest()
 
+    # Ensure your DB has manual_files.index_name (see notes below)
     with engine.begin() as conn:
         row = conn.execute(
             text("""SELECT doc_id FROM manual_files
@@ -223,11 +242,13 @@ async def log_feedback(
         return val
 
     good_raw = payload.get("good", False)
-    # normalize truthy values across json/form
     good_val = (
         bool(good_raw) if isinstance(good_raw, bool)
         else str(good_raw).lower() in ("true", "1", "yes", "y")
     )
+
+    chunks_val = payload.get("chunks", "")
+    chunks_csv = _chunks_to_csv(chunks_val)
 
     with engine.begin() as conn:
         conn.execute(
@@ -239,7 +260,7 @@ async def log_feedback(
                 "d": _get("doc_id") or "",
                 "q": (_get("question") or "")[:500],
                 "a": (_get("answer") or "")[:2000],
-                "c": (_get("chunks") or "")[:2000],
+                "c": chunks_csv,
                 "g": good_val,
                 "cust": customer,
             }
@@ -253,8 +274,8 @@ def feedback_summary(
     doc_id: str = "",
     days: int = 7,
 ):
-    where_parts = ["customer = :c", "created >= NOW() - (:days || ' days')::interval"]
-    params = {"c": customer, "days": days}
+    where_parts = ["customer = :c", "created >= NOW() - make_interval(days => :days)"]
+    params = {"c": customer, "days": int(days)}
     if doc_id:
         where_parts.append("doc_id = :d")
         params["d"] = doc_id
@@ -288,11 +309,9 @@ def chunk_quality(
     doc_id: str = "",
     customer: str = Depends(require_api_key)
 ):
-    # use bound parameters; avoid putting :d into INTERVAL literal directly
     with engine.begin() as conn:
-        # Build WHERE dynamically and pass params safely
-        where_parts = ["f.customer = :c", "f.created >= NOW() - (:days || ' days')::interval"]
-        params = {"c": customer, "days": days}
+        where_parts = ["f.customer = :c", "f.created >= NOW() - make_interval(days => :days)"]
+        params = {"c": customer, "days": int(days)}
         if doc_id:
             where_parts.append("f.doc_id = :doc")
             params["doc"] = doc_id
@@ -313,7 +332,7 @@ def chunk_quality(
             HAVING COUNT(*) >= :min
             ORDER BY total DESC
             LIMIT :lim
-        """), {**params, "min": min_votes, "lim": limit}).fetchall()
+        """), {**params, "min": int(min_votes), "lim": int(limit)}).fetchall()
 
     return [{
         "chunk_id": r.chunk_id,
@@ -386,14 +405,12 @@ async def flag_section(
             raise HTTPException(404, "section not found for this document/customer")
 
         if action == "flag":
-            # record or update flag row
             conn.execute(text("""
                 INSERT INTO manual_section_flags (section_id, doc_id, customer, reason)
                 VALUES (:sid, :doc, :cust, :r)
                 ON CONFLICT (section_id, customer)
                 DO UPDATE SET reason = EXCLUDED.reason, updated = NOW()
             """), {"sid": section_id, "doc": doc_id, "cust": customer, "r": reason[:500]})
-            # optional hint for regen pipeline
             conn.execute(text("""
                 UPDATE manual_sections SET needs_regen = TRUE WHERE id = :sid
             """), {"sid": section_id})
@@ -430,10 +447,9 @@ async def regenerate_section(
     def _do_regen(section_id: str, customer: str) -> None:
         try:
             if callable(regenerate_section_summary):
-                regenerate_section_summary(section_id, customer)  # writes into manual_sections.summary
+                regenerate_section_summary(section_id, customer)
                 print(f"♻️ regenerated summary for section {section_id}")
             else:
-                # fallback: mark for later and exit
                 with engine.begin() as conn:
                     conn.execute(text("""
                         UPDATE manual_sections
@@ -443,7 +459,6 @@ async def regenerate_section(
                 print(f"⚠️ regenerate helper not available; marked section {section_id} for batch regen")
         except Exception as e:
             print("🛑 regenerate failed:", e)
-            # keep the flag; a later batch can retry
             with engine.begin() as conn:
                 conn.execute(text("""
                     UPDATE manual_sections
