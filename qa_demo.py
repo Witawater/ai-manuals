@@ -8,8 +8,8 @@ qa_demo.py – hybrid Q-and-A for AI-Manuals
 • GPT rerank → clean **Markdown ordered-list** answers
 
 Notes:
-- Ingest writes vectors to namespace = doc_id and stores text in metadata["preview"].
-- This module now requires a doc_id (to match the ingest namespace).
+- Ingest writes to namespace = doc_id (match this when querying).
+- We prefer metadata["preview"]; fallback to metadata["text"].
 """
 
 from __future__ import annotations
@@ -23,13 +23,14 @@ from pinecone import Pinecone
 from rank_bm25 import BM25Okapi
 from sklearn.metrics.pairwise import cosine_similarity
 
-# ───────── 1. CONFIG ─────────
+# ───────── 1) CONFIG ─────────
 dotenv.load_dotenv(".env")
 
-DEBUG        = True
-EMBED_MODEL  = os.getenv("OPENAI_EMBED_MODEL", "text-embedding-3-large")
-CHAT_MODEL   = os.getenv("OPENAI_CHAT_MODEL",  "gpt-4o")
-INDEX_NAME   = os.getenv("PINECONE_INDEX",     "manuals-large")
+DEBUG         = True
+EMBED_MODEL   = os.getenv("OPENAI_EMBED_MODEL", "text-embedding-3-large")
+CHAT_MODEL    = os.getenv("OPENAI_CHAT_MODEL",  "gpt-4o")
+RERANK_MODEL  = os.getenv("OPENAI_RERANK_MODEL", "gpt-4o-mini")
+INDEX_NAME    = os.getenv("PINECONE_INDEX",     "manuals-large")
 
 MODEL_DIM = {
     "text-embedding-3-large": 3072,
@@ -42,11 +43,16 @@ ALPHA        = 0.50
 FALLBACK_CUT = 0.25
 
 SAFETY_WORDS = ("warning", "notice", "important", "alarm", "code ")
+# Small lexical nudges that often map to “how do I…?” questions
+KEY_BOOST = (
+    "drain", "draining", "drain tap", "drain screw", "filling / draining",
+    "fill", "empty", "switch on", "switch off", "power", "pump", "cooling machine"
+)
 
 pc     = Pinecone(api_key=os.getenv("PINECONE_API_KEY") or "")
 openai = OpenAI(api_key=os.getenv("OPENAI_API_KEY") or "")
 
-# ───────── 2. INDEX GUARD (no silent auto-create here) ─────────
+# ───────── 2) INDEX GUARD ─────────
 if INDEX_NAME not in pc.list_indexes().names():
     raise RuntimeError(f"Pinecone index '{INDEX_NAME}' not found. Ingest must create it first.")
 desc = pc.describe_index(INDEX_NAME)
@@ -63,14 +69,20 @@ def _norm(txt: str) -> str:
         txt = txt[:-1]
     return txt
 
+def _txt(m) -> str:
+    return (m.metadata.get("preview") or m.metadata.get("text") or "").lower()
+
 def _embed(text: str) -> List[float]:
-    return openai.embeddings.create(model=EMBED_MODEL, input=text).data[0].embedding
+    try:
+        return openai.embeddings.create(model=EMBED_MODEL, input=text).data[0].embedding
+    except Exception as e:
+        if DEBUG: print("embed failed:", e)
+        return [0.0] * MODEL_DIM  # safe fallback; will yield low scores
 
 def mmr(matches, *, k: int, lam: float = .5):
     if k >= len(matches): return matches
-    # Need values for diversity; if not present, skip MMR safely
-    if not all(getattr(m, "values", None) for m in matches):
-        return matches[:k]
+    if not all(getattr(m, "values", None) is not None for m in matches):
+        return matches[:k]  # if no vectors, skip diversity safely
     vecs = [m.values for m in matches]
     sim = cosine_similarity(vecs, vecs)
     q_sim = [m.score for m in matches]
@@ -81,26 +93,29 @@ def mmr(matches, *, k: int, lam: float = .5):
         chosen.append(best)
     return [matches[i] for i in chosen]
 
-# ───────── 4. MAIN ─────────
+# ───────── 4) MAIN ─────────
 def chat(
     question: str,
     customer: str = "demo01",
     doc_type: str = "",
-    doc_id: str = "",               # REQUIRED: matches ingest namespace
+    doc_id: str = "",
     top_k: int = 60,
     concise: bool = False,
     fallback: bool = True,
 ) -> Dict[str, object]:
 
+    if not question or not question.strip():
+        return {"answer":"Please enter a question.",
+                "chunks_used":[], "grounded":False, "confidence":0.0}
+
     if not doc_id:
-        # Ingest writes into namespace=doc_id, so querying without it returns nothing
         return {"answer": "No document selected. Please upload a manual first.",
                 "chunks_used": [], "grounded": False, "confidence": 0.0}
 
     q_canon = _norm(question)
     q_vec = _embed(q_canon)
 
-    # Metadata filter still applied (customer, optional doc_type/notes boost later)
+    # Filter by tenant; restrict by namespace=doc_id
     filter_by = {"customer": {"$eq": customer}}
 
     res = idx.query(
@@ -108,49 +123,53 @@ def chat(
         top_k=top_k,
         filter=filter_by,
         include_metadata=True,
-        include_values=True,   # needed for MMR diversity
-        namespace=doc_id,      # ← must match ingest
+        include_values=True,
+        namespace=doc_id,
     )
 
     if not res.matches:
-        print(f"❌ No match – q='{question}' cid='{customer}' doc='{doc_id}'")
+        if DEBUG: print(f"❌ No match – q='{question}' cid='{customer}' doc='{doc_id}'")
         return {"answer": "Nothing found in this manual. Try rephrasing or another section.",
                 "chunks_used": [], "grounded": False, "confidence": 0.0}
 
-    # Use preview text stored by ingest (fallback to 'text' for legacy vectors)
-    def _txt(m): return (m.metadata.get("preview")
-                         or m.metadata.get("text")
-                         or "").lower()
-
+    # Tokenize docs for BM25
     docs_tok = [_tokenize(_txt(m)) for m in res.matches]
     bm25 = BM25Okapi(docs_tok)
     bm25_raw = np.asarray(bm25.get_scores(_tokenize(q_canon)), dtype=float)
     max_bm25 = bm25_raw.max() if bm25_raw.size else 0.0
     bm25_norm = (bm25_raw / max_bm25).tolist() if max_bm25 else bm25_raw.tolist()
 
-    # Hybrid score
+    # Hybrid score (embed + BM25)
     for m, b, e in zip(res.matches, bm25_norm, [m.score for m in res.matches]):
         m.score = float(ALPHA * e + (1 - ALPHA) * b)
 
-    # Safety boost (warnings etc.)
+    # Safety-word preselection
     safety, rest = [], []
     for m in res.matches:
-        txt = _txt(m)
-        (safety if any(w in txt for w in SAFETY_WORDS) else rest).append(m)
+        (safety if any(w in _txt(m) for w in SAFETY_WORDS) else rest).append(m)
     safety = safety[:6]
     rest = mmr(rest, k=max(0, MMR_KEEP - len(safety)), lam=.5)
     res.matches = safety + rest
 
-    # Heuristic boosts for doc_type/notes signal (metadata from ingest/app)
+    # Heuristic boosts: doc_type/notes + light keyword contains
     boosted = []
     q_low = q_canon
+    q_terms = set(_tokenize(q_low))
     for m in res.matches:
         s = m.score
-        if doc_type and (m.metadata.get("doc_type") or "").lower() == doc_type.lower():
-            s += .10
-        note = (m.metadata.get("notes") or "").lower()
+        md = m.metadata or {}
+        if doc_type and (md.get("doc_type") or "").lower() == doc_type.lower():
+            s += 0.10
+        note = (md.get("notes") or "").lower()
         if note and note in q_low:
-            s += .07
+            s += 0.07
+        text_lc = _txt(m)
+        # small lexical nudge if any key term present in chunk
+        if any(k in text_lc for k in KEY_BOOST):
+            s += 0.10
+        # tiny nudge if any exact query token appears
+        if any(t in text_lc for t in q_terms):
+            s += 0.05
         boosted.append((s, m))
     res.matches = [m for s, m in sorted(boosted, key=lambda t: t[0], reverse=True)]
 
@@ -160,75 +179,87 @@ def chat(
             pv = _txt(m)[:80].replace("\n", " ")
             print(f"  [{i}] {m.score:.4f} → {pv}…  (pg={m.metadata.get('page')})")
 
-    # Low-signal fallback
+    # If scores are very low, optionally do a general-model fallback
     top_scores = [m.score for m in res.matches[:2]] or [0.0]
-    if np.mean(top_scores) < FALLBACK_CUT:
-        if not fallback:
-            return {"answer": "Manual doesn’t cover this.",
-                    "chunks_used": [], "grounded": True, "confidence": 0.0}
-        fb = openai.chat.completions.create(
-            model=CHAT_MODEL,
-            messages=[
-                {"role": "system", "content": "You are a helpful assistant."},
-                {"role": "user", "content": question}
-            ],
-            temperature=.3,
-        ).choices[0].message.content.strip()
-        print(f"⚠️ Fallback – q='{question}' cid='{customer}' doc='{doc_id}'")
+    if np.mean(top_scores) < FALLBACK_CUT and fallback:
+        try:
+            fb = openai.chat.completions.create(
+                model=CHAT_MODEL,
+                messages=[
+                    {"role": "system", "content": "You are a helpful assistant."},
+                    {"role": "user", "content": question}
+                ],
+                temperature=.3,
+            ).choices[0].message.content.strip()
+        except Exception as e:
+            if DEBUG: print("fallback failed:", e)
+            fb = "Sorry—couldn’t generate a fallback just now."
         return {"answer": "(General guidance) " + fb,
                 "chunks_used": [], "grounded": False, "confidence": .4}
 
-    # Rerank: ask the model to pick indices of the best chunks (use previews)
+    # Rerank with a cheaper model; only ask for as many as we have
+    want = min(RERANK_KEEP, len(res.matches))
     rerank_prompt = (
         "Pick the most relevant chunks.\n\nQUESTION:\n"
         f"{question}\n\nCHUNKS:\n" +
         "\n\n".join(f"[{i}] {_txt(m)[:400]}" for i, m in enumerate(res.matches)) +
-        f"\n\nReturn exactly {RERANK_KEEP} numbers (comma-separated). No other text."
+        f"\n\nReturn exactly {want} numbers (comma-separated). No other text."
     )
-    keep = openai.chat.completions.create(
-        model=CHAT_MODEL,
-        messages=[{"role": "user", "content": rerank_prompt}],
-        temperature=0,
-    ).choices[0].message.content
+    try:
+        keep = openai.chat.completions.create(
+            model=RERANK_MODEL,
+            messages=[{"role": "user", "content": rerank_prompt}],
+            temperature=0,
+        ).choices[0].message.content
+        idx_keep = {int(x) for x in re.findall(r"\d+", keep)}
+    except Exception as e:
+        if DEBUG: print("rerank failed:", e)
+        idx_keep = set()
 
-    idx_keep = {int(x) for x in re.findall(r"\d+", keep)}
-    sel = [m for i, m in enumerate(res.matches) if i in idx_keep][:RERANK_KEEP] \
-          or res.matches[:RERANK_KEEP]
+    sel = [m for i, m in enumerate(res.matches) if i in idx_keep][:want] or res.matches[:want]
 
-    # Build grounded context (still use preview; it’s enough for extraction-style answers)
+    # Build grounded context
     context = "\n\n".join(
         f"[{i+1}] {_txt(m)[:1500].strip()}"
         for i, m in enumerate(sel)
     )
+
+    # Generation: be strict about using context, but don't force “Not found” unless zero matches
     sys_prompt = (
         "You are a technical assistant answering **only** from the excerpts below. "
-        "Output a **Markdown ordered list**; leave one blank line between items and "
+        "Output a **Markdown ordered list** of steps; leave one blank line between items and "
         "**bold the imperative verb** at the start of each step.\n"
         "• Include every numbered step, WARNING / NOTICE block, key sequence and "
-        "display confirmation verbatim.\n"
-        "• Cite each fact like [2]. Reply “Not found in manual.” if needed."
+        "display confirmation verbatim when present.\n"
+        "• Cite each fact like [2]."
     )
     user_prompt = (
         f"{context}\n\n► QUESTION: {question}\n\n" +
         ("Answer in 2-4 sentences and cite sources."
          if concise else "Write a precise, complete answer with citations.")
     )
-    answer = openai.chat.completions.create(
-        model=CHAT_MODEL,
-        messages=[{"role": "system", "content": sys_prompt},
-                  {"role": "user", "content": user_prompt}],
-        temperature=0, max_tokens=450,
-    ).choices[0].message.content.strip()
+
+    try:
+        answer = openai.chat.completions.create(
+            model=CHAT_MODEL,
+            messages=[{"role": "system", "content": sys_prompt},
+                      {"role": "user", "content": user_prompt}],
+            temperature=0, max_tokens=450,
+        ).choices[0].message.content.strip()
+    except Exception as e:
+        if DEBUG: print("answer gen failed:", e)
+        return {"answer":"Temporarily couldn’t generate an answer. Please try again.",
+                "chunks_used":[m.id for m in sel], "grounded":True,
+                "confidence": float(sel[0].score) if sel else 0.0}
 
     return {
-        "answer": answer,
+        "answer": answer or "No answer generated.",
         "chunks_used": [m.id for m in sel],
         "grounded": True,
         "confidence": float(sel[0].score) if sel else 0.0,
     }
 
 if __name__ == "__main__":
-    # Quick smoke test: replace doc_id with a real one from your upload.
     for q in ["How do I drain the system?",
               "Does it support Modbus?",
               "What is 2 + 2?"]:

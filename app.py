@@ -51,7 +51,7 @@ app.add_middleware(
     allow_origins=[o.strip() for o in _allow_origins if o.strip()],
     allow_methods=["*"],
     allow_headers=["Content-Type", "X-API-Key"],
-    allow_credentials=True,  # ✅ needed for cookies/credentials
+    allow_credentials=True,  # needed for cookies/credentials
 )
 
 # ─── helpers ────────────────────────────────────────────────
@@ -84,7 +84,7 @@ async def upload_pdf(
             size += len(chunk)
     file_hash = sha.hexdigest()
 
-    # Ensure your DB has manual_files.index_name (see notes below)
+    # Ensure your DB has manual_files.index_name
     with engine.begin() as conn:
         row = conn.execute(
             text("""SELECT doc_id FROM manual_files
@@ -148,6 +148,8 @@ def save_meta(
     JOBS[doc_id].setdefault("meta", {}).update(
         {"doc_type": doc_type, "notes": notes[:200]}
     )
+    # clear any stale error from prior runs
+    JOBS[doc_id].pop("error", None)
 
     background_tasks.add_task(
         _ingest_and_cleanup,
@@ -164,18 +166,30 @@ def _ingest_and_cleanup(path: str, customer: str, doc_id: str) -> None:
         if doc_id in JOBS:
             JOBS[doc_id]["done"] = done
     try:
+        # clear any previous error before starting
+        JOBS.get(doc_id, {}).pop("error", None)
+
         ingest(path, customer, CHUNK_TOKENS, OVERLAP,
                dry_run=False, progress_cb=_progress,
                common_meta=JOBS[doc_id].get("meta", {}),
                doc_id=doc_id)
+
+        # mark success; ensure done == total
         JOBS[doc_id]["ready"] = True
+        JOBS[doc_id]["done"] = JOBS[doc_id].get("total", JOBS[doc_id].get("done", 0))
+        # on success, ensure no error remains
+        JOBS[doc_id].pop("error", None)
         print("✅ ingest complete", path)
     except Exception as exc:
         JOBS.setdefault(doc_id, {})["error"] = str(exc)
         print("🛑 ingest failed", exc)
     finally:
-        try: os.remove(path)
-        except FileNotFoundError: pass
+        # remove tmp file and hide path from status
+        try:
+            os.remove(path)
+        except FileNotFoundError:
+            pass
+        JOBS.get(doc_id, {}).pop("path", None)
 
 # ─── 4. Ingest status ───────────────────────────────────────
 @app.get("/ingest/status")
@@ -183,7 +197,11 @@ def ingest_status(doc_id: str, customer: str = Depends(require_api_key)):
     job = JOBS.get(doc_id)
     if not job:
         raise HTTPException(404, "doc_id not found")
-    return job
+    # don’t expose path; drop error once ready
+    resp = {k: v for k, v in job.items() if k != "path"}
+    if resp.get("ready"):
+        resp.pop("error", None)
+    return resp
 
 # ─── 5. Ask question ─────────────────────────────────────────
 @app.post("/chat")
