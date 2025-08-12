@@ -9,7 +9,7 @@ qa_demo.py – hybrid Q-and-A for AI-Manuals
 
 Notes:
 - Ingest writes to namespace = doc_id (match this when querying).
-- We prefer metadata["preview"]; fallback to metadata["text"].
+- We prefer metadata["preview"]; fallback to metadata["text"] for legacy data.
 """
 
 from __future__ import annotations
@@ -26,11 +26,12 @@ from sklearn.metrics.pairwise import cosine_similarity
 # ───────── 1) CONFIG ─────────
 dotenv.load_dotenv(".env")
 
-DEBUG         = True
+DEBUG         = os.getenv("QA_DEBUG", "true").lower() in {"1", "true", "yes"}
 EMBED_MODEL   = os.getenv("OPENAI_EMBED_MODEL", "text-embedding-3-large")
 CHAT_MODEL    = os.getenv("OPENAI_CHAT_MODEL",  "gpt-4o")
 RERANK_MODEL  = os.getenv("OPENAI_RERANK_MODEL", "gpt-4o-mini")
 INDEX_NAME    = os.getenv("PINECONE_INDEX",     "manuals-large")
+LOG_PATH      = os.getenv("QA_LOG_PATH", "/mnt/data/manual_eval.log")
 
 MODEL_DIM = {
     "text-embedding-3-large": 3072,
@@ -43,7 +44,7 @@ ALPHA        = 0.50
 FALLBACK_CUT = 0.25
 
 SAFETY_WORDS = ("warning", "notice", "important", "alarm", "code ")
-# Small lexical nudges that often map to “how do I…?” questions
+# Small lexical nudges that map to “how do I…?” questions
 KEY_BOOST = (
     "drain", "draining", "drain tap", "drain screw", "filling / draining",
     "fill", "empty", "switch on", "switch off", "power", "pump", "cooling machine"
@@ -77,12 +78,12 @@ def _embed(text: str) -> List[float]:
         return openai.embeddings.create(model=EMBED_MODEL, input=text).data[0].embedding
     except Exception as e:
         if DEBUG: print("embed failed:", e)
-        return [0.0] * MODEL_DIM  # safe fallback; will yield low scores
+        return [0.0] * MODEL_DIM  # safe fallback; yields low scores
 
 def mmr(matches, *, k: int, lam: float = .5):
     if k >= len(matches): return matches
     if not all(getattr(m, "values", None) is not None for m in matches):
-        return matches[:k]  # if no vectors, skip diversity safely
+        return matches[:k]  # if no vectors available, skip diversity safely
     vecs = [m.values for m in matches]
     sim = cosine_similarity(vecs, vecs)
     q_sim = [m.score for m in matches]
@@ -164,11 +165,9 @@ def chat(
         if note and note in q_low:
             s += 0.07
         text_lc = _txt(m)
-        # small lexical nudge if any key term present in chunk
-        if any(k in text_lc for k in KEY_BOOST):
+        if any(k in text_lc for k in KEY_BOOST):  # small lexical nudge
             s += 0.10
-        # tiny nudge if any exact query token appears
-        if any(t in text_lc for t in q_terms):
+        if any(t in text_lc for t in q_terms):    # tiny nudge for exact tokens
             s += 0.05
         boosted.append((s, m))
     res.matches = [m for s, m in sorted(boosted, key=lambda t: t[0], reverse=True)]
@@ -224,7 +223,7 @@ def chat(
         for i, m in enumerate(sel)
     )
 
-    # Generation: be strict about using context, but don't force “Not found” unless zero matches
+    # Generation: be strict about using context; do not force “Not found” unless zero matches
     sys_prompt = (
         "You are a technical assistant answering **only** from the excerpts below. "
         "Output a **Markdown ordered list** of steps; leave one blank line between items and "
@@ -252,14 +251,35 @@ def chat(
                 "chunks_used":[m.id for m in sel], "grounded":True,
                 "confidence": float(sel[0].score) if sel else 0.0}
 
+    # Write metrics line for /metrics
+    try:
+        avg_conf = float(np.mean([m.score for m in sel[:8]])) if sel else 0.0
+        with open(LOG_PATH, "a") as f:
+            # "<timestamp> <tag> <count> <score>"
+            f.write(f"{time.strftime('%Y-%m-%d')} qa {len(sel[:8])} {avg_conf:.3f}\n")
+    except Exception as e:
+        if DEBUG: print("metrics log failed:", e)
+
+    # Prepare a compact sources list for UI/debugging
+    sources = [
+        {
+            "id": m.id,
+            "page": int((m.metadata or {}).get("page") or 0),
+            "preview": (_txt(m)[:140] + "…") if len(_txt(m)) > 140 else _txt(m)
+        }
+        for m in sel[:8]
+    ]
+
     return {
         "answer": answer or "No answer generated.",
-        "chunks_used": [m.id for m in sel],
+        "chunks_used": [m.id for m in sel[:8]],
+        "sources": sources,
         "grounded": True,
         "confidence": float(sel[0].score) if sel else 0.0,
     }
 
 if __name__ == "__main__":
+    # Quick smoke test: replace doc_id with a real one from your upload.
     for q in ["How do I drain the system?",
               "Does it support Modbus?",
               "What is 2 + 2?"]:
