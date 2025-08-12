@@ -195,13 +195,26 @@ def _ingest_and_cleanup(path: str, customer: str, doc_id: str) -> None:
 @app.get("/ingest/status")
 def ingest_status(doc_id: str, customer: str = Depends(require_api_key)):
     job = JOBS.get(doc_id)
-    if not job:
-        raise HTTPException(404, "doc_id not found")
-    # don’t expose path; drop error once ready
-    resp = {k: v for k, v in job.items() if k != "path"}
-    if resp.get("ready"):
-        resp.pop("error", None)
-    return resp
+    if job:
+        # don’t expose path; drop error once ready
+        resp = {k: v for k, v in job.items() if k != "path"}
+        if resp.get("ready"):
+            resp.pop("error", None)
+        return resp
+
+    # Fallback: after restart, check DB to confirm the doc exists for this customer.
+    with engine.begin() as conn:
+        row = conn.execute(text("""
+            SELECT 1 FROM manual_files
+            WHERE doc_id = :d AND customer = :c
+            LIMIT 1
+        """), {"d": doc_id, "c": customer}).fetchone()
+
+    if row:
+        # We don't have live progress after a restart; report ready so UI can proceed.
+        return {"ready": True, "total": 0, "done": 0, "meta": {}, "customer": customer}
+
+    raise HTTPException(404, "doc_id not found")
 
 # ─── 5. Ask question ─────────────────────────────────────────
 @app.post("/chat")
