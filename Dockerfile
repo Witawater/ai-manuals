@@ -1,6 +1,6 @@
 FROM python:3.11-slim
 
-# ─── Install required OS packages ───────────────
+# ─── System deps ─────────────────────────────────────────────
 RUN apt-get update && apt-get install -y --no-install-recommends \
     build-essential \
     libjpeg-dev \
@@ -8,30 +8,24 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     gcc \
     curl \
     libpq-dev \
-    && apt-get clean \
-    && rm -rf /var/lib/apt/lists/*
+  && apt-get clean \
+  && rm -rf /var/lib/apt/lists/*
 
-# ─── App setup ───────────────────────────────────
+# ─── App setup ───────────────────────────────────────────────
 WORKDIR /app
-COPY requirements.txt .
 
-# ─── Python env tweaks ───────────────────────────
+# Python runtime flags
 ENV PYTHONDONTWRITEBYTECODE=1
 ENV PYTHONUNBUFFERED=1
 
-# ─── Install Python deps ─────────────────────────
+# Install Python deps first (better layer caching)
+COPY requirements.txt .
 RUN python -m pip install --upgrade pip && \
     pip install --no-cache-dir -r requirements.txt
 
-# ─── Secrets vault files (encrypted env + decrypt helper) ──
-COPY .env.production.enc decrypt_env.py /app/
-
-# ─── Copy the rest of the codebase ───────────────
+# Copy the rest of the code
 COPY . .
 
-# ─── Port and start ──────────────────────────────
-ENV PORT=8000
-EXPOSE ${PORT}
-
-# Run decrypt_env.py first, then launch Uvicorn
-CMD ["bash", "-c", "python decrypt_env.py && uvicorn app:app --host 0.0.0.0 --port ${PORT}"]
+# Render will inject $PORT at runtime; default to 8000 for local runs
+EXPOSE 8000
+CMD ["bash", "-lc", "uvicorn app:app --host 0.0.0.0 --port ${PORT:-8000}"]
