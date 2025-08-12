@@ -42,3 +42,10 @@ patch_*.py
 
 .env.production.save
 *.save
+
+# Local secrets / artifacts
+.env
+.env.production.enc
+vault_key.txt
+db.sqlite3
+dump.pg
